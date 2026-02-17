@@ -5,16 +5,19 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 from contextlib import contextmanager
 from enum import Enum as PyEnum
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Text,
-    DateTime, Boolean, Enum, ForeignKey, Index
+    DateTime, Boolean, Enum, ForeignKey, Index, inspect, text
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
 
 from .config import DATABASE_URL
+
+logger = logging.getLogger("backend.database")
 
 engine = create_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
@@ -51,7 +54,7 @@ class LotConfig(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     # ID лота на FunPay (если указан, используется точное совпадение)
-    lot_id = Column(Integer, nullable=True, unique=True, index=True,
+    lot_id = Column(Integer, nullable=True, index=True,
                     comment="ID лота на FunPay (для точного совпадения)")
     # Название лота (для отображения)
     lot_name = Column(String(512), nullable=True,
@@ -209,8 +212,47 @@ class StatsSnapshot(Base):
 # ---------- Helpers ----------
 
 def init_db():
-    """Создать все таблицы."""
+    """Создать все таблицы и выполнить миграции."""
     Base.metadata.create_all(bind=engine)
+    
+    # Миграция: добавить новые поля в lot_configs, если их нет
+    try:
+        inspector = inspect(engine)
+        if inspector.has_table('lot_configs'):
+            columns = [col['name'] for col in inspector.get_columns('lot_configs')]
+            
+            with engine.begin() as conn:  # begin() автоматически коммитит
+                # Добавляем новые поля, если их нет
+                if 'lot_id' not in columns:
+                    try:
+                        conn.execute(text("ALTER TABLE lot_configs ADD COLUMN lot_id INTEGER"))
+                        logger.info("Миграция: добавлено поле lot_id")
+                    except Exception as e:
+                        logger.warning(f"Не удалось добавить lot_id: {e}")
+                
+                if 'lot_name' not in columns:
+                    try:
+                        conn.execute(text("ALTER TABLE lot_configs ADD COLUMN lot_name VARCHAR(512)"))
+                        logger.info("Миграция: добавлено поле lot_name")
+                    except Exception as e:
+                        logger.warning(f"Не удалось добавить lot_name: {e}")
+                
+                if 'script_custom_text' not in columns:
+                    try:
+                        conn.execute(text("ALTER TABLE lot_configs ADD COLUMN script_custom_text TEXT"))
+                        logger.info("Миграция: добавлено поле script_custom_text")
+                    except Exception as e:
+                        logger.warning(f"Не удалось добавить script_custom_text: {e}")
+                
+                if 'updated_at' not in columns:
+                    try:
+                        conn.execute(text("ALTER TABLE lot_configs ADD COLUMN updated_at DATETIME"))
+                        logger.info("Миграция: добавлено поле updated_at")
+                    except Exception as e:
+                        logger.warning(f"Не удалось добавить updated_at: {e}")
+    except Exception as e:
+        logger.warning(f"Ошибка при проверке миграций: {e}")
+    
     # Создать дефолтные настройки автоматизации, если их нет
     with get_session() as session:
         if not session.query(AutomationSettings).first():
