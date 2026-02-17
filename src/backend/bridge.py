@@ -71,6 +71,9 @@ class FunPayBridge:
         # Синхронизация существующих заказов при старте
         self._sync_existing_orders()
 
+        # Предзагрузка лотов в кэш (в фоне)
+        threading.Thread(target=self._preload_funpay_lots, daemon=True, name="PreloadLots").start()
+
         # Создаём Runner
         self.runner = Runner(self.account, disable_message_requests=False,
                              disabled_order_requests=False)
@@ -478,13 +481,65 @@ class FunPayBridge:
 
         def _send_reminder():
             time.sleep(delay_minutes * 60)
-            lang = db_order.buyer_lang or "ru"
-            self.send_status_message(db_order.chat_id, "review_reminder", lang)
-            logger.info(f"Напоминание об отзыве отправлено для #{db_order.funpay_order_id}")
+            # Проверяем, что заказ всё ещё подтверждён (не возвращён)
+            with get_session() as session:
+                check_order = session.query(Order).filter(
+                    Order.id == db_order.id
+                ).first()
+                if check_order and check_order.status == OrderStatus.CONFIRMED:
+                    lang = check_order.buyer_lang or "ru"
+                    self.send_status_message(check_order.chat_id, "review_reminder", lang)
+                    logger.info(f"Напоминание об отзыве отправлено для #{check_order.funpay_order_id}")
+                else:
+                    logger.info(f"Напоминание об отзыве отменено для #{db_order.funpay_order_id} (заказ изменён)")
 
         t = threading.Thread(target=_send_reminder, daemon=True,
                              name=f"ReviewReminder-{db_order.funpay_order_id}")
         t.start()
+    
+    def _preload_funpay_lots(self):
+        """Предзагрузка лотов FunPay в кэш."""
+        try:
+            import time as time_module
+            from . import routes
+            
+            logger.info("Предзагрузка лотов FunPay...")
+            account = self.account
+            all_lots = []
+            
+            if hasattr(account, 'categories') and account.categories:
+                for category in account.categories:
+                    try:
+                        subcategories = category.get_subcategories() if hasattr(category, 'get_subcategories') else []
+                        for subcategory in subcategories:
+                            try:
+                                lots = account.get_my_subcategory_lots(subcategory.id)
+                                for lot in lots:
+                                    all_lots.append({
+                                        "id": lot.id,
+                                        "name": lot.description or f"Лот #{lot.id}",
+                                        "subcategory_id": subcategory.id,
+                                        "subcategory_name": subcategory.name or "",
+                                        "category_name": category.name or "",
+                                        "price": lot.price,
+                                        "currency": str(lot.currency),
+                                        "amount": lot.amount,
+                                        "server": lot.server,
+                                        "side": lot.side,
+                                    })
+                            except Exception as e:
+                                logger.warning(f"Не удалось получить лоты для подкатегории {subcategory.id}: {e}")
+                                continue
+                    except Exception as e:
+                        logger.warning(f"Ошибка при обработке категории: {e}")
+                        continue
+            
+            sorted_lots = sorted(all_lots, key=lambda x: x.get("name", ""))
+            routes._funpay_lots_cache = sorted_lots
+            routes._funpay_lots_cache_time = time_module.time()
+            logger.info(f"Предзагружено {len(sorted_lots)} лотов FunPay")
+        except Exception as e:
+            logger.error(f"Ошибка предзагрузки лотов: {e}", exc_info=True)
 
     # ------------------------------------------------------------------
     # Фоновые задачи

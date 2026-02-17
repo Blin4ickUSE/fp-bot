@@ -90,7 +90,6 @@ export default function App() {
   const [editingScriptText, setEditingScriptText] = useState(null);
   const [selectedFunpayLot, setSelectedFunpayLot] = useState(null);
   const [newLotScript, setNewLotScript] = useState('none');
-  const [lotSearchQuery, setLotSearchQuery] = useState('');
 
   // Telegram WebApp
   useEffect(() => {
@@ -218,17 +217,18 @@ export default function App() {
   };
 
   const handleAddLot = async () => {
-    if (!selectedFunpayLot && !lotSearchQuery.trim()) {
-      setError('Выберите лот или введите паттерн');
+    if (!selectedFunpayLot) {
+      setError('Выберите лот');
       return;
     }
     try {
-      const data = selectedFunpayLot
-        ? { lot_id: selectedFunpayLot.id, lot_name: selectedFunpayLot.name, script_type: newLotScript }
-        : { lot_name_pattern: lotSearchQuery.trim(), script_type: newLotScript };
+      const data = {
+        lot_id: selectedFunpayLot.id,
+        lot_name: selectedFunpayLot.name,
+        script_type: newLotScript
+      };
       await api.createLot(data);
       setSelectedFunpayLot(null);
-      setLotSearchQuery('');
       setNewLotScript('none');
       await loadLots();
     } catch (e) { setError(e.message); }
@@ -662,14 +662,8 @@ export default function App() {
   };
 
   const renderLotsSubView = () => {
-    // Безопасная фильтрация с проверкой на массив
-    const filteredFunpayLots = (Array.isArray(funpayLots) ? funpayLots : []).filter(lot =>
-      lot && lot.name && (
-        lot.name.toLowerCase().includes(lotSearchQuery.toLowerCase()) ||
-        (lot.category_name && lot.category_name.toLowerCase().includes(lotSearchQuery.toLowerCase())) ||
-        (lot.subcategory_name && lot.subcategory_name.toLowerCase().includes(lotSearchQuery.toLowerCase()))
-      )
-    );
+    // Безопасная проверка на массив
+    const allLots = Array.isArray(funpayLots) ? funpayLots : [];
 
     return (
       <div className="space-y-6 animate-slide-right">
@@ -686,70 +680,45 @@ export default function App() {
             <Plus size={12} /> Добавить привязку
           </h3>
           
-          {/* Поиск лота */}
+          {/* Выбор лота - выпадающий список */}
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600" size={14} />
-            <input
-              type="text"
-              placeholder="Поиск лота по названию или категории..."
-              className="w-full bg-black border border-zinc-800 rounded-xl py-3 pl-10 pr-4 text-xs font-bold text-white placeholder:text-zinc-700 focus:outline-none focus:border-zinc-600 transition-all"
-              value={lotSearchQuery}
+            <label className="block text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-2 px-1">
+              Выберите лот
+            </label>
+            <select
+              value={selectedFunpayLot?.id || ''}
               onChange={(e) => {
-                setLotSearchQuery(e.target.value);
-                setSelectedFunpayLot(null);
+                const lotId = e.target.value;
+                if (lotId) {
+                  const lot = allLots.find(l => l.id == lotId);
+                  setSelectedFunpayLot(lot || null);
+                } else {
+                  setSelectedFunpayLot(null);
+                }
               }}
-            />
+              className="w-full bg-black border border-zinc-800 rounded-xl py-3 px-4 text-xs font-bold text-white focus:outline-none focus:border-zinc-600 transition-all"
+            >
+              <option value="">-- Выберите лот --</option>
+              {allLots.map(lot => (
+                <option key={lot.id} value={lot.id}>
+                  {lot.name} ({lot.category_name} → {lot.subcategory_name}) - {lot.price} {lot.currency}
+                </option>
+              ))}
+            </select>
+            {loading && allLots.length === 0 && (
+              <p className="text-[10px] text-zinc-500 mt-2 text-center">Загрузка лотов...</p>
+            )}
+            {!loading && allLots.length === 0 && (
+              <p className="text-[10px] text-zinc-500 mt-2 text-center">Лоты не найдены</p>
+            )}
           </div>
 
-          {/* Выпадающий список лотов */}
-          {lotSearchQuery && filteredFunpayLots.length > 0 && (
-            <div className="max-h-48 overflow-y-auto bg-black border border-zinc-800 rounded-xl">
-              {filteredFunpayLots.slice(0, 10).map(lot => (
-                <button
-                  key={lot.id || Math.random()}
-                  onClick={() => {
-                    setSelectedFunpayLot(lot);
-                    setLotSearchQuery(lot.name || '');
-                  }}
-                  className={`w-full text-left px-4 py-2.5 text-xs font-bold transition-colors ${
-                    selectedFunpayLot?.id === lot.id
-                      ? 'bg-white text-black'
-                      : 'text-white hover:bg-zinc-800'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="truncate">{lot.name || 'Без названия'}</span>
-                    {lot.price && <span className="text-[10px] text-zinc-500 ml-2">{lot.price} {lot.currency || ''}</span>}
-                  </div>
-                  {(lot.category_name || lot.subcategory_name) && (
-                    <div className="text-[9px] text-zinc-500 mt-0.5">
-                      {lot.category_name || ''} {lot.category_name && lot.subcategory_name ? '→' : ''} {lot.subcategory_name || ''}
-                    </div>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
-          
-          {/* Сообщение, если лоты не загружены */}
-          {loading && funpayLots.length === 0 && (
-            <div className="text-center py-4 text-[10px] text-zinc-500">
-              Загрузка лотов...
-            </div>
-          )}
-          
-          {/* Сообщение, если поиск не дал результатов */}
-          {!loading && lotSearchQuery && filteredFunpayLots.length === 0 && funpayLots.length > 0 && (
-            <div className="text-center py-4 text-[10px] text-zinc-500">
-              Лоты не найдены
-            </div>
-          )}
-
-          {/* Выбранный лот или паттерн */}
+          {/* Выбранный лот */}
           {selectedFunpayLot && (
             <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
               <p className="text-[10px] font-black text-emerald-400 uppercase tracking-widest mb-1">Выбранный лот</p>
               <p className="text-xs font-bold text-white">{selectedFunpayLot.name}</p>
+              <p className="text-[10px] text-zinc-400 mt-1">{selectedFunpayLot.category_name} → {selectedFunpayLot.subcategory_name}</p>
             </div>
           )}
 
@@ -767,7 +736,7 @@ export default function App() {
 
           <button
             onClick={handleAddLot}
-            disabled={!selectedFunpayLot && !lotSearchQuery.trim()}
+            disabled={!selectedFunpayLot}
             className="w-full py-3 bg-white text-black rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Добавить

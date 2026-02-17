@@ -213,15 +213,19 @@ async def order_action(
             return {"ok": True, "order": order.to_dict()}
 
         elif action == "refund":
-            order.status = OrderStatus.REFUNDED
-            session.commit()
+            # Сначала выполняем возврат через FunPay API
             if _funpay_bridge:
-                _funpay_bridge.send_status_message(order.chat_id, "order_cancelled", order.buyer_lang)
-                # Выполнить возврат через FunPay API
                 try:
                     _funpay_bridge.do_refund(order.funpay_order_id)
                 except Exception as e:
                     logger.error(f"Ошибка при возврате {order.funpay_order_id}: {e}")
+                    raise HTTPException(status_code=500, detail=f"Ошибка возврата: {str(e)}")
+            
+            # Затем обновляем статус и отправляем сообщение
+            order.status = OrderStatus.REFUNDED
+            session.commit()
+            if _funpay_bridge:
+                _funpay_bridge.send_status_message(order.chat_id, "order_cancelled", order.buyer_lang)
                 _funpay_bridge.notify_telegram(
                     f"❌ Возврат по заказу #{order.funpay_order_id}\n"
                     f"Покупатель: {order.buyer_username}"
@@ -236,9 +240,22 @@ async def order_action(
 # Маршруты — Конфигурация лотов
 # ---------------------------------------------------------------------------
 
+# Кэш для лотов FunPay (обновляется при старте и по требованию)
+_funpay_lots_cache = None
+_funpay_lots_cache_time = None
+FUNPAY_LOTS_CACHE_TTL = 3600  # 1 час
+
 @app.get("/api/funpay-lots")
 async def get_funpay_lots(user: dict = Depends(get_current_user)):
-    """Получить список всех лотов пользователя с FunPay."""
+    """Получить список всех лотов пользователя с FunPay (с кэшированием)."""
+    global _funpay_lots_cache, _funpay_lots_cache_time
+    
+    # Проверяем кэш
+    import time
+    if _funpay_lots_cache is not None and _funpay_lots_cache_time:
+        if time.time() - _funpay_lots_cache_time < FUNPAY_LOTS_CACHE_TTL:
+            return _funpay_lots_cache
+    
     if not _funpay_bridge or not _funpay_bridge.account:
         return []  # Возвращаем пустой массив вместо ошибки
     
@@ -278,7 +295,13 @@ async def get_funpay_lots(user: dict = Depends(get_current_user)):
                 logger.warning(f"Ошибка при обработке категории {category.name if hasattr(category, 'name') else 'unknown'}: {e}")
                 continue
         
-        return sorted(all_lots, key=lambda x: x.get("name", ""))
+        sorted_lots = sorted(all_lots, key=lambda x: x.get("name", ""))
+        
+        # Сохраняем в кэш
+        _funpay_lots_cache = sorted_lots
+        _funpay_lots_cache_time = time.time()
+        
+        return sorted_lots
     except Exception as e:
         logger.error(f"Ошибка получения лотов FunPay: {e}", exc_info=True)
         return []  # Возвращаем пустой массив вместо ошибки
