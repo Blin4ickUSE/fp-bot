@@ -429,7 +429,7 @@ class FunPayBridge:
                 # Автоподнятие лотов
                 if settings and settings.auto_bump and (now - last_bump_time > BUMP_INTERVAL):
                     try:
-                        categories = self.account.get_categories()
+                        categories = self.account.categories  # Это свойство, а не метод
                         for cat in categories:
                             try:
                                 self.account.raise_lots(cat.id)
