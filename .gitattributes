@@ -1,0 +1,7 @@
+# Force LF line endings for shell scripts (critical for Docker/Linux)
+*.sh text eol=lf
+entrypoint.sh text eol=lf
+install.sh text eol=lf
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf
+nginx.conf.template text eol=lf

@@ -73,7 +73,7 @@ def validate_telegram_init_data(init_data: str) -> dict | None:
 async def get_current_user(request: Request) -> dict:
     """Проверка авторизации через заголовок X-Init-Data."""
     init_data = request.headers.get("X-Init-Data", "")
-    # Для локальной разработки разрешаем X-Api-Key
+    # Для локальной разработки/тестирования разрешаем X-Api-Key
     api_key = request.headers.get("X-Api-Key", "")
     if api_key and api_key == API_SECRET:
         return {"id": 0, "first_name": "admin"}
@@ -81,10 +81,13 @@ async def get_current_user(request: Request) -> dict:
         user = validate_telegram_init_data(init_data)
         if user:
             return user
-    # В dev-режиме без токена пропускаем
+    # В dev-режиме без токена пропускаем (для тестирования)
     if not TELEGRAM_BOT_TOKEN:
         return {"id": 0, "first_name": "dev"}
-    raise HTTPException(status_code=401, detail="Unauthorized")
+    # Если есть токен, но нет initData — это ошибка авторизации
+    # Но для удобства разработки разрешаем доступ с предупреждением
+    logger.warning(f"Unauthorized access attempt from {request.client.host} (no initData)")
+    raise HTTPException(status_code=401, detail="Unauthorized: Telegram WebApp initData required")
 
 
 # ---------------------------------------------------------------------------

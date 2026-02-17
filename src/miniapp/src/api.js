@@ -17,12 +17,22 @@ function getHeaders() {
 async function request(method, path, body = null) {
   const opts = { method, headers: getHeaders() };
   if (body) opts.body = JSON.stringify(body);
-  const res = await fetch(`${BASE_URL}${path}`, opts);
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || 'Request failed');
+  
+  try {
+    const res = await fetch(`${BASE_URL}${path}`, opts);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      const msg = err.detail || err.message || `HTTP ${res.status}: ${res.statusText}`;
+      console.error(`[API] ${method} ${path} failed:`, msg);
+      throw new Error(msg);
+    }
+    return res.json();
+  } catch (e) {
+    if (e instanceof TypeError && e.message.includes('fetch')) {
+      throw new Error('Не удалось подключиться к серверу. Проверьте подключение.');
+    }
+    throw e;
   }
-  return res.json();
 }
 
 // --- Orders ---

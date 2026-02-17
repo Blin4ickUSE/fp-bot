@@ -111,9 +111,14 @@ export default function App() {
     try {
       setLoading(true);
       const [s, c] = await Promise.all([api.getStats(), api.getChartData()]);
+      console.log('[App] Stats loaded:', s);
+      console.log('[App] Chart data loaded:', c);
       setStats(s);
       setChartData(c);
-    } catch (e) { setError(e.message); }
+    } catch (e) {
+      console.error('[App] Failed to load dashboard:', e);
+      setError(e.message);
+    }
     finally { setLoading(false); }
   };
 
@@ -121,8 +126,12 @@ export default function App() {
     try {
       setLoading(true);
       const data = await api.getOrders();
+      console.log('[App] Orders loaded:', data);
       setOrders(data);
-    } catch (e) { setError(e.message); }
+    } catch (e) {
+      console.error('[App] Failed to load orders:', e);
+      setError(e.message);
+    }
     finally { setLoading(false); }
   };
 
