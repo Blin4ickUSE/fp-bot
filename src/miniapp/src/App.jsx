@@ -104,14 +104,21 @@ export default function App() {
 
   // Load data on tab change
   useEffect(() => {
-    if (activeTab === 'dashboard') loadDashboard();
-    if (activeTab === 'orders') loadOrders();
-    if (activeTab === 'automation') loadAutomation();
-    if (activeTab === 'settings') {
+    if (activeTab === 'dashboard') {
+      loadDashboard();
+    } else if (activeTab === 'orders') {
+      loadOrders();
+    } else if (activeTab === 'automation') {
+      loadAutomation();
+    } else if (activeTab === 'settings') {
       loadLots();
       loadScriptTypes();
-      if (settingsView === 'lots') loadFunpayLots();
+      if (settingsView === 'lots' && funpayLots.length === 0) {
+        // Загружаем только если список пустой
+        loadFunpayLots();
+      }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, settingsView]);
 
   const loadDashboard = async () => {
@@ -134,9 +141,10 @@ export default function App() {
       setLoading(true);
       const data = await api.getOrders();
       console.log('[App] Orders loaded:', data);
-      setOrders(data);
+      setOrders(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error('[App] Failed to load orders:', e);
+      setOrders([]); // Устанавливаем пустой массив при ошибке
       setError(e.message);
     }
     finally { setLoading(false); }
@@ -144,18 +152,30 @@ export default function App() {
 
   const loadLots = async () => {
     try {
+      setLoading(true);
       const data = await api.getLots();
-      setLots(data);
-    } catch (e) { setError(e.message); }
+      setLots(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error('[App] Failed to load lots:', e);
+      setLots([]); // Устанавливаем пустой массив при ошибке
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const loadFunpayLots = async () => {
     try {
       setLoading(true);
       const data = await api.getFunpayLots();
-      setFunpayLots(data);
-    } catch (e) { setError(e.message); }
-    finally { setLoading(false); }
+      setFunpayLots(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error('[App] Error loading FunPay lots:', e);
+      setFunpayLots([]); // Устанавливаем пустой массив при ошибке
+      // Не показываем ошибку пользователю, просто пустой список
+    } finally {
+      setLoading(false);
+    }
   };
 
   const loadScriptTypes = async () => {
@@ -169,9 +189,14 @@ export default function App() {
     try {
       setLoading(true);
       const data = await api.getAutomation();
-      setAutomation(data);
-    } catch (e) { setError(e.message); }
-    finally { setLoading(false); }
+      setAutomation(data || {});
+    } catch (e) {
+      console.error('[App] Failed to load automation:', e);
+      setAutomation({}); // Устанавливаем пустой объект при ошибке
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleOrderAction = async (orderId, action) => {
@@ -637,9 +662,13 @@ export default function App() {
   };
 
   const renderLotsSubView = () => {
-    const filteredFunpayLots = funpayLots.filter(lot =>
-      lot.name.toLowerCase().includes(lotSearchQuery.toLowerCase()) ||
-      lot.category_name?.toLowerCase().includes(lotSearchQuery.toLowerCase())
+    // Безопасная фильтрация с проверкой на массив
+    const filteredFunpayLots = (Array.isArray(funpayLots) ? funpayLots : []).filter(lot =>
+      lot && lot.name && (
+        lot.name.toLowerCase().includes(lotSearchQuery.toLowerCase()) ||
+        (lot.category_name && lot.category_name.toLowerCase().includes(lotSearchQuery.toLowerCase())) ||
+        (lot.subcategory_name && lot.subcategory_name.toLowerCase().includes(lotSearchQuery.toLowerCase()))
+      )
     );
 
     return (
@@ -677,10 +706,10 @@ export default function App() {
             <div className="max-h-48 overflow-y-auto bg-black border border-zinc-800 rounded-xl">
               {filteredFunpayLots.slice(0, 10).map(lot => (
                 <button
-                  key={lot.id}
+                  key={lot.id || Math.random()}
                   onClick={() => {
                     setSelectedFunpayLot(lot);
-                    setLotSearchQuery(lot.name);
+                    setLotSearchQuery(lot.name || '');
                   }}
                   className={`w-full text-left px-4 py-2.5 text-xs font-bold transition-colors ${
                     selectedFunpayLot?.id === lot.id
@@ -689,12 +718,30 @@ export default function App() {
                   }`}
                 >
                   <div className="flex items-center justify-between">
-                    <span className="truncate">{lot.name}</span>
-                    <span className="text-[10px] text-zinc-500 ml-2">{lot.price} {lot.currency}</span>
+                    <span className="truncate">{lot.name || 'Без названия'}</span>
+                    {lot.price && <span className="text-[10px] text-zinc-500 ml-2">{lot.price} {lot.currency || ''}</span>}
                   </div>
-                  <div className="text-[9px] text-zinc-500 mt-0.5">{lot.category_name} → {lot.subcategory_name}</div>
+                  {(lot.category_name || lot.subcategory_name) && (
+                    <div className="text-[9px] text-zinc-500 mt-0.5">
+                      {lot.category_name || ''} {lot.category_name && lot.subcategory_name ? '→' : ''} {lot.subcategory_name || ''}
+                    </div>
+                  )}
                 </button>
               ))}
+            </div>
+          )}
+          
+          {/* Сообщение, если лоты не загружены */}
+          {loading && funpayLots.length === 0 && (
+            <div className="text-center py-4 text-[10px] text-zinc-500">
+              Загрузка лотов...
+            </div>
+          )}
+          
+          {/* Сообщение, если поиск не дал результатов */}
+          {!loading && lotSearchQuery && filteredFunpayLots.length === 0 && funpayLots.length > 0 && (
+            <div className="text-center py-4 text-[10px] text-zinc-500">
+              Лоты не найдены
             </div>
           )}
 
@@ -828,7 +875,15 @@ export default function App() {
               <h2 className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.2em]">Управление товарами</h2>
             </div>
             <button
-              onClick={() => { setSettingsView('lots'); loadLots(); loadScriptTypes(); loadFunpayLots(); }}
+              onClick={() => {
+                setSettingsView('lots');
+                loadLots();
+                loadScriptTypes();
+                // Загружаем FunPay лоты только если список пустой
+                if (funpayLots.length === 0) {
+                  loadFunpayLots();
+                }
+              }}
               className="w-full flex items-center justify-between p-5 bg-black border border-zinc-800 rounded-2xl group active:scale-[0.98] transition-all"
             >
               <div className="flex items-center gap-4">

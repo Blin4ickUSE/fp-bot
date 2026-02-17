@@ -240,38 +240,48 @@ async def order_action(
 async def get_funpay_lots(user: dict = Depends(get_current_user)):
     """Получить список всех лотов пользователя с FunPay."""
     if not _funpay_bridge or not _funpay_bridge.account:
-        raise HTTPException(status_code=503, detail="FunPay не подключён")
+        return []  # Возвращаем пустой массив вместо ошибки
     
     try:
         account = _funpay_bridge.account
         all_lots = []
         
+        # Проверяем, что categories доступны
+        if not hasattr(account, 'categories') or not account.categories:
+            logger.warning("Категории не загружены")
+            return []
+        
         # Проходим по всем категориям и подкатегориям
         for category in account.categories:
-            for subcategory in category.get_subcategories():
-                try:
-                    lots = account.get_my_subcategory_lots(subcategory.id)
-                    for lot in lots:
-                        all_lots.append({
-                            "id": lot.id,
-                            "name": lot.description or f"Лот #{lot.id}",
-                            "subcategory_id": subcategory.id,
-                            "subcategory_name": subcategory.name,
-                            "category_name": category.name,
-                            "price": lot.price,
-                            "currency": str(lot.currency),
-                            "amount": lot.amount,
-                            "server": lot.server,
-                            "side": lot.side,
-                        })
-                except Exception as e:
-                    logger.warning(f"Не удалось получить лоты для подкатегории {subcategory.id}: {e}")
-                    continue
+            try:
+                subcategories = category.get_subcategories() if hasattr(category, 'get_subcategories') else []
+                for subcategory in subcategories:
+                    try:
+                        lots = account.get_my_subcategory_lots(subcategory.id)
+                        for lot in lots:
+                            all_lots.append({
+                                "id": lot.id,
+                                "name": lot.description or f"Лот #{lot.id}",
+                                "subcategory_id": subcategory.id,
+                                "subcategory_name": subcategory.name or "",
+                                "category_name": category.name or "",
+                                "price": lot.price,
+                                "currency": str(lot.currency),
+                                "amount": lot.amount,
+                                "server": lot.server,
+                                "side": lot.side,
+                            })
+                    except Exception as e:
+                        logger.warning(f"Не удалось получить лоты для подкатегории {subcategory.id}: {e}")
+                        continue
+            except Exception as e:
+                logger.warning(f"Ошибка при обработке категории {category.name if hasattr(category, 'name') else 'unknown'}: {e}")
+                continue
         
-        return sorted(all_lots, key=lambda x: x["name"])
+        return sorted(all_lots, key=lambda x: x.get("name", ""))
     except Exception as e:
         logger.error(f"Ошибка получения лотов FunPay: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Ошибка получения лотов: {str(e)}")
+        return []  # Возвращаем пустой массив вместо ошибки
 
 
 @app.get("/api/lots")
