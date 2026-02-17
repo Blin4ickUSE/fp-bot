@@ -9,6 +9,7 @@ import hmac
 import json
 import datetime
 import logging
+import time
 from typing import Optional
 from urllib.parse import unquote, parse_qs
 
@@ -336,7 +337,14 @@ async def get_stats(user: dict = Depends(get_current_user)):
         bot_status = "OFFLINE"
         if _funpay_bridge and _funpay_bridge.account:
             acc = _funpay_bridge.account
-            balance = f"{acc.total_balance or 0} {acc.currency}" if acc.total_balance is not None else "—"
+            # Обновляем баланс, если прошло больше 5 минут с последнего обновления
+            if acc.last_update and (time.time() - acc.last_update) > 300:
+                try:
+                    acc.get()
+                except Exception as e:
+                    logger.warning(f"Не удалось обновить баланс: {e}")
+            if acc.total_balance is not None:
+                balance = f"{acc.total_balance:,} {acc.currency}".replace(",", " ")
             bot_status = "ONLINE" if _funpay_bridge.is_running else "OFFLINE"
 
         return {

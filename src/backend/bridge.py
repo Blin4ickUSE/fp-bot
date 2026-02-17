@@ -68,6 +68,9 @@ class FunPayBridge:
         self.is_running = True
         self._stop_event.clear()
 
+        # Синхронизация существующих заказов при старте
+        self._sync_existing_orders()
+
         # Создаём Runner
         self.runner = Runner(self.account, disable_message_requests=False,
                              disabled_order_requests=False)
@@ -322,6 +325,67 @@ class FunPayBridge:
                     self._schedule_review_reminder(db_order, settings)
 
     # ------------------------------------------------------------------
+    # Синхронизация существующих заказов
+    # ------------------------------------------------------------------
+
+    def _sync_existing_orders(self):
+        """Синхронизирует существующие заказы из FunPay при старте."""
+        try:
+            logger.info("Синхронизация существующих заказов...")
+            # Получаем активные заказы (paid = ожидающие выполнения)
+            _, orders, _, _ = self.account.get_sales(
+                include_paid=True,
+                include_closed=False,
+                include_refunded=False
+            )
+            
+            synced = 0
+            with get_session() as session:
+                for order_shortcut in orders:
+                    existing = session.query(Order).filter(
+                        Order.funpay_order_id == order_shortcut.id
+                    ).first()
+                    if existing:
+                        continue  # Уже есть в БД
+                    
+                    script_type = self._match_script_type(order_shortcut.description or "")
+                    buyer_lang = self._detect_buyer_language(order_shortcut)
+                    
+                    # Определяем статус на основе статуса в FunPay
+                    if order_shortcut.status == OrderStatuses.PAID:
+                        status = OrderStatus.WAITING_DATA if script_type != ScriptType.NONE else OrderStatus.DATA_COLLECTED
+                    elif order_shortcut.status == OrderStatuses.CLOSED:
+                        status = OrderStatus.CONFIRMED
+                    elif order_shortcut.status == OrderStatuses.REFUNDED:
+                        status = OrderStatus.REFUNDED
+                    else:
+                        status = OrderStatus.WAITING_DATA
+                    
+                    db_order = Order(
+                        funpay_order_id=order_shortcut.id,
+                        buyer_username=order_shortcut.buyer_username,
+                        buyer_id=order_shortcut.buyer_id,
+                        chat_id=str(order_shortcut.chat_id),
+                        item_name=order_shortcut.description or "Unknown",
+                        price=order_shortcut.price,
+                        currency=str(order_shortcut.currency),
+                        status=status,
+                        script_type=script_type,
+                        buyer_lang=buyer_lang,
+                    )
+                    session.add(db_order)
+                    synced += 1
+                
+                session.commit()
+            
+            if synced > 0:
+                logger.info(f"Синхронизировано {synced} существующих заказов.")
+            else:
+                logger.info("Новых заказов для синхронизации не найдено.")
+        except Exception as e:
+            logger.error(f"Ошибка синхронизации заказов: {e}", exc_info=True)
+
+    # ------------------------------------------------------------------
     # Вспомогательные методы
     # ------------------------------------------------------------------
 
@@ -417,12 +481,12 @@ class FunPayBridge:
                 with get_session() as session:
                     settings = session.query(AutomationSettings).first()
 
-                # Вечный онлайн
+                # Вечный онлайн + обновление баланса
                 if settings and settings.eternal_online and (now - last_online_time > ONLINE_INTERVAL):
                     try:
                         self.account.get()
                         last_online_time = now
-                        logger.debug("Вечный онлайн: аккаунт обновлён.")
+                        logger.debug(f"Вечный онлайн: аккаунт обновлён. Баланс: {self.account.total_balance or 0} {self.account.currency}")
                     except Exception as e:
                         logger.error(f"Ошибка вечного онлайна: {e}")
 
