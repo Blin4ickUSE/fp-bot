@@ -1,0 +1,56 @@
+# ============================================================
+# FunPay Manager — Docker Compose
+# Usage: docker compose up -d --build
+# ============================================================
+
+services:
+  # --- Python backend (FastAPI + FunPay Bridge + Telegram Bot) ---
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fpbot-backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - API_HOST=0.0.0.0
+      - API_PORT=8080
+      - DATABASE_URL=sqlite:////app/data/fpbot.db
+    volumes:
+      - fpbot-data:/app/data
+    networks:
+      - fpbot-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # --- Nginx (SSL + frontend + reverse proxy to API) ---
+  nginx:
+    build:
+      context: .
+      dockerfile: nginx/Dockerfile
+    container_name: fpbot-nginx
+    restart: unless-stopped
+    ports:
+      - "21000:21000"
+      - "21080:21080"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - fpbot-net
+
+volumes:
+  fpbot-data:
+    driver: local
+
+networks:
+  fpbot-net:
+    driver: bridge
