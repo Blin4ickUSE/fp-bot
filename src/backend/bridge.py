@@ -135,10 +135,15 @@ class FunPayBridge:
         logger.info(f"Новый заказ: #{order_shortcut.id} от {order_shortcut.buyer_username}")
 
         # Определяем тип скрипта на основе конфигурации лотов
-        script_type = self._match_script_type(order_shortcut.description or "")
+        script_type, lot_config_id = self._match_script_type(order_shortcut)
 
         # Определяем язык покупателя
         buyer_lang = self._detect_buyer_language(order_shortcut)
+
+        # Получаем название товара
+        item_name = getattr(order_shortcut, 'description', None) or \
+                   getattr(order_shortcut, 'short_description', None) or \
+                   getattr(order_shortcut, 'full_description', None) or "Unknown"
 
         # Создаём запись в БД
         with get_session() as session:
@@ -153,7 +158,7 @@ class FunPayBridge:
                 buyer_username=order_shortcut.buyer_username,
                 buyer_id=order_shortcut.buyer_id,
                 chat_id=str(order_shortcut.chat_id),
-                item_name=order_shortcut.description or "Unknown",
+                item_name=item_name,
                 price=order_shortcut.price,
                 currency=str(order_shortcut.currency),
                 status=OrderStatus.WAITING_DATA if script_type != ScriptType.NONE else OrderStatus.DATA_COLLECTED,
@@ -167,7 +172,7 @@ class FunPayBridge:
         self.notify_telegram(
             f"🆕 Новый заказ #{order_shortcut.id}\n"
             f"Покупатель: {order_shortcut.buyer_username}\n"
-            f"Товар: {order_shortcut.description}\n"
+            f"Товар: {item_name}\n"
             f"Цена: {order_shortcut.price} {order_shortcut.currency}\n"
             f"Скрипт: {script_type.value}"
         )
@@ -348,7 +353,7 @@ class FunPayBridge:
                     if existing:
                         continue  # Уже есть в БД
                     
-                    script_type = self._match_script_type(order_shortcut.description or "")
+                    script_type, _ = self._match_script_type(order_shortcut)
                     buyer_lang = self._detect_buyer_language(order_shortcut)
                     
                     # Определяем статус на основе статуса в FunPay
@@ -366,7 +371,9 @@ class FunPayBridge:
                         buyer_username=order_shortcut.buyer_username,
                         buyer_id=order_shortcut.buyer_id,
                         chat_id=str(order_shortcut.chat_id),
-                        item_name=order_shortcut.description or "Unknown",
+                        item_name=getattr(order_shortcut, 'description', None) or \
+                              getattr(order_shortcut, 'short_description', None) or \
+                              getattr(order_shortcut, 'full_description', None) or "Unknown",
                         price=order_shortcut.price,
                         currency=str(order_shortcut.currency),
                         status=status,
@@ -389,22 +396,40 @@ class FunPayBridge:
     # Вспомогательные методы
     # ------------------------------------------------------------------
 
-    def _match_script_type(self, description: str) -> ScriptType:
-        """Определяет тип скрипта по описанию заказа, сверяя с конфигурацией лотов."""
+    def _match_script_type(self, order_shortcut) -> tuple[ScriptType, Optional[int]]:
+        """Определяет тип скрипта по заказу, сверяя с конфигурацией лотов.
+        Возвращает (script_type, lot_config_id).
+        """
         with get_session() as session:
             configs = session.query(LotConfig).all()
+            
+            # Сначала проверяем точное совпадение по lot_id (если есть в order_shortcut)
+            # В FunPayAPI order_shortcut может содержать lot_id
+            if hasattr(order_shortcut, 'lot_id') and order_shortcut.lot_id:
+                for config in configs:
+                    if config.lot_id and config.lot_id == order_shortcut.lot_id:
+                        return config.script_type, config.id
+            
+            # Затем проверяем по паттерну названия
+            # В OrderShortcut может быть short_description или full_description
+            description = getattr(order_shortcut, 'description', None) or \
+                         getattr(order_shortcut, 'short_description', None) or \
+                         getattr(order_shortcut, 'full_description', None) or ""
             desc_lower = description.lower()
             for config in configs:
-                if config.lot_name_pattern.lower() in desc_lower:
-                    return config.script_type
-        return ScriptType.NONE
+                if config.lot_name_pattern and config.lot_name_pattern.lower() in desc_lower:
+                    return config.script_type, config.id
+            
+            return ScriptType.NONE, None
 
     def _detect_buyer_language(self, order_shortcut) -> str:
         """Определяет язык покупателя.
         Используем описание заказа или профиль.
         """
         # Простая эвристика: если в описании есть кириллица — ru, иначе en
-        desc = order_shortcut.description or ""
+        desc = getattr(order_shortcut, 'description', None) or \
+               getattr(order_shortcut, 'short_description', None) or \
+               getattr(order_shortcut, 'full_description', None) or ""
         cyrillic_count = sum(1 for c in desc if '\u0400' <= c <= '\u04ff')
         if cyrillic_count > len(desc) * 0.3:
             return "ru"

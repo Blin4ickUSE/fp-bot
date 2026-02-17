@@ -45,6 +45,7 @@ export const orderAction = (id, action) =>
   request('POST', `/orders/${id}/action`, { action });
 
 // --- Lots ---
+export const getFunpayLots = () => request('GET', '/funpay-lots');
 export const getLots = () => request('GET', '/lots');
 export const createLot = (data) => request('POST', '/lots', data);
 export const updateLot = (id, data) => request('PUT', `/lots/${id}`, data);

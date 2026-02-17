@@ -50,14 +50,39 @@ class LotConfig(Base):
     __tablename__ = "lot_configs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    # Паттерн для сопоставления лота (часть названия / ID подкатегории)
-    lot_name_pattern = Column(String(512), nullable=False, unique=True,
+    # ID лота на FunPay (если указан, используется точное совпадение)
+    lot_id = Column(Integer, nullable=True, unique=True, index=True,
+                    comment="ID лота на FunPay (для точного совпадения)")
+    # Название лота (для отображения)
+    lot_name = Column(String(512), nullable=True,
+                      comment="Название лота для отображения")
+    # Паттерн для сопоставления лота (часть названия, используется если lot_id не указан)
+    lot_name_pattern = Column(String(512), nullable=True,
                               comment="Подстрока в названии лота для сопоставления")
     script_type = Column(Enum(ScriptType), default=ScriptType.NONE, nullable=False)
+    # Кастомный текст скрипта (JSON, переопределяет дефолтный)
+    script_custom_text = Column(Text, nullable=True,
+                                comment="Кастомный текст скрипта (JSON: {step_id: {ru: ..., en: ...}})")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    def get_script_custom_text(self) -> dict:
+        """Получить кастомный текст скрипта."""
+        if not self.script_custom_text:
+            return {}
+        try:
+            return json.loads(self.script_custom_text)
+        except json.JSONDecodeError:
+            return {}
+
+    def set_script_custom_text(self, text: dict):
+        """Установить кастомный текст скрипта."""
+        self.script_custom_text = json.dumps(text, ensure_ascii=False) if text else None
 
     def __repr__(self):
-        return f"<LotConfig {self.lot_name_pattern} → {self.script_type.value}>"
+        if self.lot_id:
+            return f"<LotConfig lot_id={self.lot_id} → {self.script_type.value}>"
+        return f"<LotConfig pattern={self.lot_name_pattern} → {self.script_type.value}>"
 
 
 class Order(Base):

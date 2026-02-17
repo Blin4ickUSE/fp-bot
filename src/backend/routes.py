@@ -111,13 +111,18 @@ class OrderActionRequest(BaseModel):
 
 
 class LotConfigCreate(BaseModel):
-    lot_name_pattern: str
+    lot_id: Optional[int] = None  # ID лота на FunPay
+    lot_name: Optional[str] = None  # Название лота
+    lot_name_pattern: Optional[str] = None  # Паттерн (если lot_id не указан)
     script_type: str
 
 
 class LotConfigUpdate(BaseModel):
+    lot_id: Optional[int] = None
+    lot_name: Optional[str] = None
     lot_name_pattern: Optional[str] = None
     script_type: Optional[str] = None
+    script_custom_text: Optional[dict] = None  # Кастомный текст скрипта
 
 
 class AutomationSettingsUpdate(BaseModel):
@@ -231,15 +236,57 @@ async def order_action(
 # Маршруты — Конфигурация лотов
 # ---------------------------------------------------------------------------
 
+@app.get("/api/funpay-lots")
+async def get_funpay_lots(user: dict = Depends(get_current_user)):
+    """Получить список всех лотов пользователя с FunPay."""
+    if not _funpay_bridge or not _funpay_bridge.account:
+        raise HTTPException(status_code=503, detail="FunPay не подключён")
+    
+    try:
+        account = _funpay_bridge.account
+        all_lots = []
+        
+        # Проходим по всем категориям и подкатегориям
+        for category in account.categories:
+            for subcategory in category.get_subcategories():
+                try:
+                    lots = account.get_my_subcategory_lots(subcategory.id)
+                    for lot in lots:
+                        all_lots.append({
+                            "id": lot.id,
+                            "name": lot.description or f"Лот #{lot.id}",
+                            "subcategory_id": subcategory.id,
+                            "subcategory_name": subcategory.name,
+                            "category_name": category.name,
+                            "price": lot.price,
+                            "currency": str(lot.currency),
+                            "amount": lot.amount,
+                            "server": lot.server,
+                            "side": lot.side,
+                        })
+                except Exception as e:
+                    logger.warning(f"Не удалось получить лоты для подкатегории {subcategory.id}: {e}")
+                    continue
+        
+        return sorted(all_lots, key=lambda x: x["name"])
+    except Exception as e:
+        logger.error(f"Ошибка получения лотов FunPay: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Ошибка получения лотов: {str(e)}")
+
+
 @app.get("/api/lots")
 async def get_lot_configs(user: dict = Depends(get_current_user)):
+    """Получить список конфигураций лотов (привязок)."""
     with get_session() as session:
         configs = session.query(LotConfig).all()
         return [
             {
                 "id": c.id,
+                "lot_id": c.lot_id,
+                "lot_name": c.lot_name,
                 "lot_name_pattern": c.lot_name_pattern,
                 "script_type": c.script_type.value,
+                "script_custom_text": c.get_script_custom_text(),
             }
             for c in configs
         ]
@@ -248,15 +295,40 @@ async def get_lot_configs(user: dict = Depends(get_current_user)):
 @app.post("/api/lots")
 async def create_lot_config(body: LotConfigCreate, user: dict = Depends(get_current_user)):
     with get_session() as session:
+        # Проверка: должен быть указан либо lot_id, либо lot_name_pattern
+        if not body.lot_id and not body.lot_name_pattern:
+            raise HTTPException(status_code=400, detail="Укажите либо ID лота, либо паттерн названия")
+        
+        # Проверка на дубликаты
+        if body.lot_id:
+            existing = session.query(LotConfig).filter(LotConfig.lot_id == body.lot_id).first()
+            if existing:
+                raise HTTPException(status_code=400, detail=f"Лот с ID {body.lot_id} уже настроен")
+        elif body.lot_name_pattern:
+            existing = session.query(LotConfig).filter(LotConfig.lot_name_pattern == body.lot_name_pattern).first()
+            if existing:
+                raise HTTPException(status_code=400, detail=f"Паттерн '{body.lot_name_pattern}' уже используется")
+        
         try:
             st = ScriptType(body.script_type)
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Unknown script type: {body.script_type}")
-        config = LotConfig(lot_name_pattern=body.lot_name_pattern, script_type=st)
+        
+        config = LotConfig(
+            lot_id=body.lot_id,
+            lot_name=body.lot_name,
+            lot_name_pattern=body.lot_name_pattern,
+            script_type=st
+        )
         session.add(config)
         session.commit()
-        return {"id": config.id, "lot_name_pattern": config.lot_name_pattern,
-                "script_type": config.script_type.value}
+        return {
+            "id": config.id,
+            "lot_id": config.lot_id,
+            "lot_name": config.lot_name,
+            "lot_name_pattern": config.lot_name_pattern,
+            "script_type": config.script_type.value,
+        }
 
 
 @app.put("/api/lots/{lot_id}")
@@ -265,6 +337,11 @@ async def update_lot_config(lot_id: int, body: LotConfigUpdate, user: dict = Dep
         config = session.query(LotConfig).filter(LotConfig.id == lot_id).first()
         if not config:
             raise HTTPException(status_code=404, detail="Lot config not found")
+        
+        if body.lot_id is not None:
+            config.lot_id = body.lot_id
+        if body.lot_name is not None:
+            config.lot_name = body.lot_name
         if body.lot_name_pattern is not None:
             config.lot_name_pattern = body.lot_name_pattern
         if body.script_type is not None:
@@ -272,9 +349,18 @@ async def update_lot_config(lot_id: int, body: LotConfigUpdate, user: dict = Dep
                 config.script_type = ScriptType(body.script_type)
             except ValueError:
                 raise HTTPException(status_code=400, detail=f"Unknown script type: {body.script_type}")
+        if body.script_custom_text is not None:
+            config.set_script_custom_text(body.script_custom_text)
+        
         session.commit()
-        return {"id": config.id, "lot_name_pattern": config.lot_name_pattern,
-                "script_type": config.script_type.value}
+        return {
+            "id": config.id,
+            "lot_id": config.lot_id,
+            "lot_name": config.lot_name,
+            "lot_name_pattern": config.lot_name_pattern,
+            "script_type": config.script_type.value,
+            "script_custom_text": config.get_script_custom_text(),
+        }
 
 
 @app.delete("/api/lots/{lot_id}")

@@ -79,6 +79,7 @@ export default function App() {
   const [chartData, setChartData] = useState([]);
   const [orders, setOrders] = useState([]);
   const [lots, setLots] = useState([]);
+  const [funpayLots, setFunpayLots] = useState([]);
   const [scriptTypes, setScriptTypes] = useState([]);
   const [automation, setAutomation] = useState({});
   const [searchQuery, setSearchQuery] = useState('');
@@ -86,8 +87,10 @@ export default function App() {
 
   // Lot editor
   const [editingLot, setEditingLot] = useState(null);
-  const [newLotPattern, setNewLotPattern] = useState('');
+  const [editingScriptText, setEditingScriptText] = useState(null);
+  const [selectedFunpayLot, setSelectedFunpayLot] = useState(null);
   const [newLotScript, setNewLotScript] = useState('none');
+  const [lotSearchQuery, setLotSearchQuery] = useState('');
 
   // Telegram WebApp
   useEffect(() => {
@@ -104,8 +107,12 @@ export default function App() {
     if (activeTab === 'dashboard') loadDashboard();
     if (activeTab === 'orders') loadOrders();
     if (activeTab === 'automation') loadAutomation();
-    if (activeTab === 'settings') { loadLots(); loadScriptTypes(); }
-  }, [activeTab]);
+    if (activeTab === 'settings') {
+      loadLots();
+      loadScriptTypes();
+      if (settingsView === 'lots') loadFunpayLots();
+    }
+  }, [activeTab, settingsView]);
 
   const loadDashboard = async () => {
     try {
@@ -140,6 +147,15 @@ export default function App() {
       const data = await api.getLots();
       setLots(data);
     } catch (e) { setError(e.message); }
+  };
+
+  const loadFunpayLots = async () => {
+    try {
+      setLoading(true);
+      const data = await api.getFunpayLots();
+      setFunpayLots(data);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
   };
 
   const loadScriptTypes = async () => {
@@ -177,10 +193,17 @@ export default function App() {
   };
 
   const handleAddLot = async () => {
-    if (!newLotPattern.trim()) return;
+    if (!selectedFunpayLot && !lotSearchQuery.trim()) {
+      setError('Выберите лот или введите паттерн');
+      return;
+    }
     try {
-      await api.createLot({ lot_name_pattern: newLotPattern, script_type: newLotScript });
-      setNewLotPattern('');
+      const data = selectedFunpayLot
+        ? { lot_id: selectedFunpayLot.id, lot_name: selectedFunpayLot.name, script_type: newLotScript }
+        : { lot_name_pattern: lotSearchQuery.trim(), script_type: newLotScript };
+      await api.createLot(data);
+      setSelectedFunpayLot(null);
+      setLotSearchQuery('');
       setNewLotScript('none');
       await loadLots();
     } catch (e) { setError(e.message); }
@@ -198,6 +221,7 @@ export default function App() {
       await api.updateLot(id, data);
       await loadLots();
       setEditingLot(null);
+      setEditingScriptText(null);
     } catch (e) { setError(e.message); }
   };
 
@@ -612,95 +636,183 @@ export default function App() {
     );
   };
 
-  const renderLotsSubView = () => (
-    <div className="space-y-6 animate-slide-right">
-      <div className="flex items-center gap-4">
-        <button onClick={() => setSettingsView('main')} className="p-2 bg-zinc-900 rounded-xl border border-zinc-800 text-white active:scale-90 transition-all">
-          <ChevronLeft size={18} />
-        </button>
-        <h1 className="text-xl font-black text-white tracking-tighter uppercase italic">Конфигурация лотов</h1>
-      </div>
+  const renderLotsSubView = () => {
+    const filteredFunpayLots = funpayLots.filter(lot =>
+      lot.name.toLowerCase().includes(lotSearchQuery.toLowerCase()) ||
+      lot.category_name?.toLowerCase().includes(lotSearchQuery.toLowerCase())
+    );
 
-      {/* Добавить новый */}
-      <div className="bg-zinc-900 border border-zinc-800/50 rounded-2xl p-4 space-y-3">
-        <h3 className="text-[10px] font-black text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-          <Plus size={12} /> Добавить привязку
-        </h3>
-        <input
-          type="text"
-          placeholder="Подстрока в названии лота (напр: Spotify Premium)"
-          className="w-full bg-black border border-zinc-800 rounded-xl py-3 px-4 text-xs font-bold text-white placeholder:text-zinc-700 focus:outline-none focus:border-zinc-600 transition-all"
-          value={newLotPattern}
-          onChange={(e) => setNewLotPattern(e.target.value)}
-        />
-        <select
-          value={newLotScript}
-          onChange={(e) => setNewLotScript(e.target.value)}
-          className="w-full bg-black border border-zinc-800 rounded-xl py-3 px-4 text-xs font-bold text-white focus:outline-none focus:border-zinc-600 transition-all"
-        >
-          {scriptTypes.map(st => (
-            <option key={st.value} value={st.value}>{st.label}</option>
-          ))}
-        </select>
-        <button
-          onClick={handleAddLot}
-          className="w-full py-3 bg-white text-black rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all"
-        >
-          Добавить
-        </button>
-      </div>
+    return (
+      <div className="space-y-6 animate-slide-right">
+        <div className="flex items-center gap-4">
+          <button onClick={() => setSettingsView('main')} className="p-2 bg-zinc-900 rounded-xl border border-zinc-800 text-white active:scale-90 transition-all">
+            <ChevronLeft size={18} />
+          </button>
+          <h1 className="text-xl font-black text-white tracking-tighter uppercase italic">Конфигурация лотов</h1>
+        </div>
 
-      {/* Список */}
-      <div className="space-y-3">
-        {lots.map(lot => (
-          <div key={lot.id} className="bg-zinc-900 border border-zinc-800/50 rounded-2xl p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-xs font-black text-white uppercase tracking-tight">{lot.lot_name_pattern}</h3>
-                <Badge variant={lot.script_type !== 'none' ? 'white' : 'gray'}>
-                  {lot.script_type.replace('_', ' ')}
-                </Badge>
-              </div>
-              <div className="flex gap-2">
+        {/* Добавить новый */}
+        <div className="bg-zinc-900 border border-zinc-800/50 rounded-2xl p-4 space-y-3">
+          <h3 className="text-[10px] font-black text-zinc-500 uppercase tracking-widest flex items-center gap-2">
+            <Plus size={12} /> Добавить привязку
+          </h3>
+          
+          {/* Поиск лота */}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-600" size={14} />
+            <input
+              type="text"
+              placeholder="Поиск лота по названию или категории..."
+              className="w-full bg-black border border-zinc-800 rounded-xl py-3 pl-10 pr-4 text-xs font-bold text-white placeholder:text-zinc-700 focus:outline-none focus:border-zinc-600 transition-all"
+              value={lotSearchQuery}
+              onChange={(e) => {
+                setLotSearchQuery(e.target.value);
+                setSelectedFunpayLot(null);
+              }}
+            />
+          </div>
+
+          {/* Выпадающий список лотов */}
+          {lotSearchQuery && filteredFunpayLots.length > 0 && (
+            <div className="max-h-48 overflow-y-auto bg-black border border-zinc-800 rounded-xl">
+              {filteredFunpayLots.slice(0, 10).map(lot => (
                 <button
-                  onClick={() => handleDeleteLot(lot.id)}
-                  className="p-2 text-zinc-600 hover:text-red-400 transition-colors"
+                  key={lot.id}
+                  onClick={() => {
+                    setSelectedFunpayLot(lot);
+                    setLotSearchQuery(lot.name);
+                  }}
+                  className={`w-full text-left px-4 py-2.5 text-xs font-bold transition-colors ${
+                    selectedFunpayLot?.id === lot.id
+                      ? 'bg-white text-black'
+                      : 'text-white hover:bg-zinc-800'
+                  }`}
                 >
-                  <Trash2 size={14} />
+                  <div className="flex items-center justify-between">
+                    <span className="truncate">{lot.name}</span>
+                    <span className="text-[10px] text-zinc-500 ml-2">{lot.price} {lot.currency}</span>
+                  </div>
+                  <div className="text-[9px] text-zinc-500 mt-0.5">{lot.category_name} → {lot.subcategory_name}</div>
                 </button>
-              </div>
+              ))}
             </div>
-            {editingLot === lot.id ? (
-              <div className="space-y-2 animate-fade-in">
-                <select
-                  defaultValue={lot.script_type}
-                  onChange={(e) => handleUpdateLot(lot.id, { script_type: e.target.value })}
-                  className="w-full bg-black border border-zinc-800 rounded-xl py-2 px-3 text-xs font-bold text-white focus:outline-none"
-                >
-                  {scriptTypes.map(st => (
-                    <option key={st.value} value={st.value}>{st.label}</option>
-                  ))}
-                </select>
+          )}
+
+          {/* Выбранный лот или паттерн */}
+          {selectedFunpayLot && (
+            <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
+              <p className="text-[10px] font-black text-emerald-400 uppercase tracking-widest mb-1">Выбранный лот</p>
+              <p className="text-xs font-bold text-white">{selectedFunpayLot.name}</p>
+            </div>
+          )}
+
+          {/* Выбор скрипта */}
+          <select
+            value={newLotScript}
+            onChange={(e) => setNewLotScript(e.target.value)}
+            className="w-full bg-black border border-zinc-800 rounded-xl py-3 px-4 text-xs font-bold text-white focus:outline-none focus:border-zinc-600 transition-all"
+          >
+            <option value="none">Без скрипта</option>
+            {scriptTypes.filter(st => st.value !== 'none').map(st => (
+              <option key={st.value} value={st.value}>{st.label}</option>
+            ))}
+          </select>
+
+          <button
+            onClick={handleAddLot}
+            disabled={!selectedFunpayLot && !lotSearchQuery.trim()}
+            className="w-full py-3 bg-white text-black rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Добавить
+          </button>
+        </div>
+
+        {/* Список настроенных лотов */}
+        <div className="space-y-3">
+          <h3 className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1">Настроенные привязки</h3>
+          {lots.map(lot => (
+            <div key={lot.id} className="bg-zinc-900 border border-zinc-800/50 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex-1">
+                  <h3 className="text-xs font-black text-white uppercase tracking-tight">
+                    {lot.lot_name || lot.lot_name_pattern || `Лот #${lot.lot_id || '?'}`}
+                  </h3>
+                  <div className="flex gap-2 mt-1">
+                    <Badge variant={lot.script_type !== 'none' ? 'white' : 'gray'}>
+                      {lot.script_type === 'none' ? 'Без скрипта' : lot.script_type.replace(/_/g, ' ')}
+                    </Badge>
+                    {lot.lot_id && <Badge variant="blue">ID: {lot.lot_id}</Badge>}
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  {lot.script_type !== 'none' && (
+                    <button
+                      onClick={() => setEditingScriptText(editingScriptText === lot.id ? null : lot.id)}
+                      className="p-2 text-zinc-600 hover:text-blue-400 transition-colors"
+                      title="Редактировать текст скрипта"
+                    >
+                      <FileCode size={14} />
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleDeleteLot(lot.id)}
+                    className="p-2 text-zinc-600 hover:text-red-400 transition-colors"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               </div>
-            ) : (
-              <button
-                onClick={() => setEditingLot(lot.id)}
-                className="w-full py-2.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
-              >
-                <Zap size={12} /> Изменить скрипт
-              </button>
-            )}
-          </div>
-        ))}
-        {lots.length === 0 && (
-          <div className="py-10 text-center">
-            <Package size={32} className="text-zinc-800 mx-auto mb-3" />
-            <p className="text-[10px] text-zinc-600 font-bold uppercase">Нет привязок. Добавьте первую выше.</p>
-          </div>
-        )}
+              
+              {editingLot === lot.id ? (
+                <div className="space-y-2 animate-fade-in">
+                  <select
+                    defaultValue={lot.script_type}
+                    onChange={(e) => handleUpdateLot(lot.id, { script_type: e.target.value })}
+                    className="w-full bg-black border border-zinc-800 rounded-xl py-2 px-3 text-xs font-bold text-white focus:outline-none"
+                  >
+                    <option value="none">Без скрипта</option>
+                    {scriptTypes.filter(st => st.value !== 'none').map(st => (
+                      <option key={st.value} value={st.value}>{st.label}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => setEditingLot(null)}
+                    className="w-full py-2 bg-zinc-800 text-white rounded-xl text-[10px] font-black uppercase"
+                  >
+                    Сохранить
+                  </button>
+                </div>
+              ) : editingScriptText === lot.id ? (
+                <div className="space-y-3 animate-fade-in pt-2 border-t border-zinc-800">
+                  <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Редактирование текста скрипта</p>
+                  <p className="text-[9px] text-zinc-600 italic">Функция в разработке. Скоро можно будет редактировать текст сообщений скрипта.</p>
+                  <button
+                    onClick={() => setEditingScriptText(null)}
+                    className="w-full py-2 bg-zinc-800 text-white rounded-xl text-[10px] font-black uppercase"
+                  >
+                    Закрыть
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setEditingLot(lot.id)}
+                  className="w-full py-2.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
+                >
+                  <Zap size={12} /> Изменить скрипт
+                </button>
+              )}
+            </div>
+          ))}
+          {lots.length === 0 && (
+            <div className="py-10 text-center">
+              <Package size={32} className="text-zinc-800 mx-auto mb-3" />
+              <p className="text-[10px] text-zinc-600 font-bold uppercase">Нет привязок. Добавьте первую выше.</p>
+            </div>
+          )}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderSettings = () => {
     if (settingsView === 'lots') return renderLotsSubView();
@@ -716,7 +828,7 @@ export default function App() {
               <h2 className="text-[10px] font-black text-zinc-500 uppercase tracking-[0.2em]">Управление товарами</h2>
             </div>
             <button
-              onClick={() => { setSettingsView('lots'); loadLots(); loadScriptTypes(); }}
+              onClick={() => { setSettingsView('lots'); loadLots(); loadScriptTypes(); loadFunpayLots(); }}
               className="w-full flex items-center justify-between p-5 bg-black border border-zinc-800 rounded-2xl group active:scale-[0.98] transition-all"
             >
               <div className="flex items-center gap-4">
