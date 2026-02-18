@@ -350,11 +350,14 @@ async def create_lot_config(body: LotConfigCreate, user: dict = Depends(get_curr
 
     try:
         with get_session() as session:
+            # Пустые значения сохраняем как NULL: в БД может быть UNIQUE на lot_name_pattern, несколько NULL допустимы
+            _lot_name = (body.lot_name or "").strip() or None
+            _lot_pattern = (body.lot_name_pattern or "").strip() or None
             config = LotConfig(
                 script_type=st,
                 lot_id=body.lot_id,
-                lot_name=body.lot_name or "",
-                lot_name_pattern=body.lot_name_pattern or "",
+                lot_name=_lot_name,
+                lot_name_pattern=_lot_pattern,
             )
             config.set_script_keywords(keywords or [])
             session.add(config)
