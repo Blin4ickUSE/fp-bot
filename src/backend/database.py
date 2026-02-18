@@ -295,7 +295,19 @@ def init_db():
                     logger.info("Миграция: добавлено поле orders.lot_config_id")
     except Exception as e:
         logger.warning(f"Ошибка при проверке миграций: {e}")
-    
+
+    # Явно убедиться, что script_keywords есть в lot_configs (на случай устаревшей БД)
+    try:
+        inspector = inspect(engine)
+        if inspector.has_table('lot_configs'):
+            columns = [c['name'] for c in inspector.get_columns('lot_configs')]
+            if 'script_keywords' not in columns:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE lot_configs ADD COLUMN script_keywords TEXT"))
+                logger.info("Миграция: добавлена колонка lot_configs.script_keywords")
+    except Exception as e:
+        logger.warning(f"Миграция script_keywords: {e}")
+
     # Создать дефолтные настройки автоматизации, если их нет
     with get_session() as session:
         if not session.query(AutomationSettings).first():

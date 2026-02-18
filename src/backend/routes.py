@@ -334,35 +334,45 @@ async def get_lot_configs(user: dict = Depends(get_current_user)):
 
 @app.post("/api/lots")
 async def create_lot_config(body: LotConfigCreate, user: dict = Depends(get_current_user)):
-    with get_session() as session:
-        try:
-            st = ScriptType(body.script_type)
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Неизвестный тип скрипта: {body.script_type}")
+    try:
+        st = ScriptType(body.script_type)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Неизвестный тип скрипта: {body.script_type}")
 
-        keywords = body.script_keywords
-        if not keywords and body.script_type in DEFAULT_SCRIPT_KEYWORDS:
-            keywords = DEFAULT_SCRIPT_KEYWORDS[body.script_type]
-        if not keywords and not body.lot_id and not body.lot_name_pattern:
-            raise HTTPException(status_code=400, detail="Укажите ключевые слова или lot_id/паттерн")
+    keywords = body.script_keywords
+    if not keywords and body.script_type in DEFAULT_SCRIPT_KEYWORDS:
+        keywords = DEFAULT_SCRIPT_KEYWORDS[body.script_type]
+    if not keywords and not body.lot_id and not body.lot_name_pattern:
+        raise HTTPException(status_code=400, detail="Укажите ключевые слова или lot_id/паттерн")
 
-        config = LotConfig(
-            script_type=st,
-            lot_id=body.lot_id,
-            lot_name=body.lot_name,
-            lot_name_pattern=body.lot_name_pattern,
-        )
-        config.set_script_keywords(keywords or [])
-        session.add(config)
-        session.commit()
-        return {
-            "id": config.id,
-            "script_type": config.script_type.value,
-            "script_keywords": config.get_script_keywords(),
-            "lot_id": config.lot_id,
-            "lot_name": config.lot_name,
-            "lot_name_pattern": config.lot_name_pattern,
-        }
+    try:
+        with get_session() as session:
+            config = LotConfig(
+                script_type=st,
+                lot_id=body.lot_id,
+                lot_name=body.lot_name,
+                lot_name_pattern=body.lot_name_pattern,
+            )
+            config.set_script_keywords(keywords or [])
+            session.add(config)
+            session.commit()
+            return {
+                "id": config.id,
+                "script_type": config.script_type.value,
+                "script_keywords": config.get_script_keywords(),
+                "lot_id": config.lot_id,
+                "lot_name": config.lot_name,
+                "lot_name_pattern": config.lot_name_pattern,
+            }
+    except Exception as e:
+        logger.exception("Ошибка при создании конфигурации скрипта")
+        from sqlalchemy.exc import OperationalError
+        if isinstance(e, OperationalError) or "no such column" in str(e).lower():
+            raise HTTPException(
+                status_code=500,
+                detail="Ошибка БД. Перезапустите бэкенд для применения миграций.",
+            )
+        raise HTTPException(status_code=500, detail="Ошибка при сохранении конфигурации.")
 
 
 @app.put("/api/lots/{lot_id}")
