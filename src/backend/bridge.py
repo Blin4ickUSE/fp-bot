@@ -4,6 +4,7 @@ FunPay Bridge — связывает FunPayAPI (события, чаты, зак
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
@@ -22,6 +23,8 @@ from FunPayAPI.common.enums import MessageTypes, OrderStatuses, EventTypes
 
 # URL чата FunPay (node = chat_id)
 FUNPAY_CHAT_URL_TEMPLATE = "https://funpay.com/chat/?node={chat_id}"
+
+from bs4 import BeautifulSoup
 
 from .config import FUNPAY_GOLDEN_KEY, FUNPAY_USER_AGENT
 from .database import (
@@ -144,8 +147,10 @@ class FunPayBridge:
         # Определяем тип скрипта на основе конфигурации лотов
         script_type, lot_config_id = self._match_script_type(order_shortcut)
 
-        # Определяем язык покупателя
-        buyer_lang = self._detect_buyer_language(order_shortcut)
+        # Язык покупателя — из FunPay API (страница чата), иначе по описанию заказа
+        buyer_lang = self._get_buyer_lang_from_funpay_api(order_shortcut.chat_id)
+        if not buyer_lang:
+            buyer_lang = self._detect_buyer_language(order_shortcut)
 
         # Получаем название товара
         item_name = getattr(order_shortcut, 'description', None) or \
@@ -314,12 +319,7 @@ class FunPayBridge:
 
             response = script.process(state, message.text or "", custom_text=custom_text)
 
-            # Уточняем язык покупателя по тексту сообщения и сохраняем
-            msg_text = (message.text or "").strip()
-            if msg_text:
-                detected = self._detect_lang_from_text(msg_text)
-                if db_order.buyer_lang != detected:
-                    db_order.buyer_lang = detected
+            # Язык покупателя не меняем по тексту — он задаётся через FunPay API при создании заказа
             # Отправляем ответ на языке покупателя (если пусто — используем другой язык)
             msg = response.message_ru if db_order.buyer_lang == "ru" else response.message_en
             if not (msg or "").strip():
@@ -434,7 +434,7 @@ class FunPayBridge:
                     
                     script_type, lot_config_id = self._match_script_type(order_shortcut)
                     buyer_lang = self._detect_buyer_language(order_shortcut)
-                    
+
                     if order_shortcut.status == OrderStatuses.PAID:
                         status = OrderStatus.WAITING_DATA if script_type != ScriptType.NONE else OrderStatus.DATA_COLLECTED
                     elif order_shortcut.status == OrderStatuses.CLOSED:
@@ -501,8 +501,32 @@ class FunPayBridge:
             
             return ScriptType.NONE, None
 
+    def _get_buyer_lang_from_funpay_api(self, chat_id) -> Optional[str]:
+        """Получает язык из FunPay API: запрашивает страницу чата и берёт locale из data-app-data."""
+        try:
+            if not self.account or not chat_id:
+                return None
+            chat = self.account.get_chat(int(chat_id), with_history=False)
+            if not getattr(chat, "html_response", None):
+                return None
+            parser = BeautifulSoup(chat.html_response, "lxml")
+            body = parser.find("body")
+            if not body:
+                return None
+            app_data_str = body.get("data-app-data")
+            if not app_data_str:
+                return None
+            app_data = json.loads(app_data_str)
+            locale = app_data.get("locale")
+            if locale in ("ru", "en", "uk"):
+                return locale
+            return None
+        except Exception as e:
+            logger.debug(f"Не удалось получить locale чата {chat_id} из FunPay API: {e}")
+            return None
+
     def _detect_buyer_language(self, order_shortcut) -> str:
-        """Определяет язык покупателя по описанию заказа (кириллица → ru, иначе en)."""
+        """Определяет язык покупателя по описанию заказа (кириллица → ru, иначе en). Используется, если API не вернул locale."""
         desc = getattr(order_shortcut, 'description', None) or \
                getattr(order_shortcut, 'short_description', None) or \
                getattr(order_shortcut, 'full_description', None) or ""
@@ -513,15 +537,6 @@ class FunPayBridge:
             if cyrillic_count == 0 and len(desc) > 2:
                 return "en"
         return "ru"
-
-    def _detect_lang_from_text(self, text: str) -> str:
-        """Определяет язык по тексту сообщения (кириллица → ru, иначе en)."""
-        if not (text or "").strip():
-            return "ru"
-        cyrillic_count = sum(1 for c in text if '\u0400' <= c <= '\u04ff')
-        if cyrillic_count > len(text) * 0.3:
-            return "ru"
-        return "en"
 
     def _send_fp_message(self, chat_id: str, text: str):
         """Отправляет сообщение через FunPay."""

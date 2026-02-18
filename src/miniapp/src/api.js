@@ -14,25 +14,47 @@ function getHeaders() {
   return headers;
 }
 
+const RETRY_STATUSES = [502, 503, 504];
+const RETRY_MAX = 2;
+const RETRY_DELAY_MS = 1200;
+
+async function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 async function request(method, path, body = null) {
   const opts = { method, headers: getHeaders() };
   if (body) opts.body = JSON.stringify(body);
-  
-  try {
-    const res = await fetch(`${BASE_URL}${path}`, opts);
-    if (!res.ok) {
+  let lastError;
+
+  for (let attempt = 0; attempt <= RETRY_MAX; attempt++) {
+    try {
+      const res = await fetch(`${BASE_URL}${path}`, opts);
+      if (res.ok) return res.json();
+
+      const retryable = RETRY_STATUSES.includes(res.status);
+      if (retryable && attempt < RETRY_MAX) {
+        await sleep(RETRY_DELAY_MS);
+        continue;
+      }
+
       const err = await res.json().catch(() => ({ detail: res.statusText }));
       const msg = err.detail || err.message || `HTTP ${res.status}: ${res.statusText}`;
       console.error(`[API] ${method} ${path} failed:`, msg);
       throw new Error(msg);
+    } catch (e) {
+      lastError = e;
+      const isNetwork = e instanceof TypeError && (e.message.includes('fetch') || e.message.includes('Failed'));
+      const isAbort = e.name === 'AbortError';
+      if ((isNetwork || isAbort) && attempt < RETRY_MAX) {
+        await sleep(RETRY_DELAY_MS);
+        continue;
+      }
+      if (isNetwork) throw new Error('Не удалось подключиться к серверу. Проверьте подключение.');
+      throw e;
     }
-    return res.json();
-  } catch (e) {
-    if (e instanceof TypeError && e.message.includes('fetch')) {
-      throw new Error('Не удалось подключиться к серверу. Проверьте подключение.');
-    }
-    throw e;
   }
+  throw lastError;
 }
 
 // --- Orders ---
