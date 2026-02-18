@@ -350,8 +350,8 @@ async def create_lot_config(body: LotConfigCreate, user: dict = Depends(get_curr
             config = LotConfig(
                 script_type=st,
                 lot_id=body.lot_id,
-                lot_name=body.lot_name,
-                lot_name_pattern=body.lot_name_pattern,
+                lot_name=body.lot_name or "",
+                lot_name_pattern=body.lot_name_pattern or "",
             )
             config.set_script_keywords(keywords or [])
             session.add(config)
