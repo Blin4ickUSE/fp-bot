@@ -1,56 +1,95 @@
-# ============================================================
-# FunPay Manager — Docker Compose
-# Usage: docker compose up -d --build
-# ============================================================
-
 services:
-  # --- Python backend (FastAPI + FunPay Bridge + Telegram Bot) ---
-  backend:
+  # Основной бот
+  bot:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: fpbot-backend
+      dockerfile: Dockerfile.bot
+    container_name: blinvpn_bot
     restart: unless-stopped
-    env_file: .env
-    environment:
-      - API_HOST=0.0.0.0
-      - API_PORT=8080
-      - DATABASE_URL=sqlite:////app/data/fpbot.db
+    env_file:
+      - .env
     volumes:
-      - fpbot-data:/app/data
-    networks:
-      - fpbot-net
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
+      - ./data:/app/data
+    depends_on:
+      - webhook
 
-  # --- Nginx (SSL + frontend + reverse proxy to API) ---
-  nginx:
+  # Бот поддержки (топики в группе-форуме, пересылка ответов пользователям)
+  support_bot:
     build:
       context: .
-      dockerfile: nginx/Dockerfile
-    container_name: fpbot-nginx
+      dockerfile: Dockerfile.support_bot
+    container_name: blinvpn_support_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+
+  # Webhook сервер для платежных систем
+  webhook:
+    build:
+      context: .
+      dockerfile: Dockerfile.webhook
+    container_name: blinvpn_webhook
     restart: unless-stopped
     ports:
-      - "21000:21000"
-      - "21080:21080"
-    environment:
-      - DOMAIN=${DOMAIN:-localhost}
+      - "127.0.0.1:${WEBHOOK_PORT:-5000}:5000"
+    env_file:
+      - .env
     volumes:
-      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - ./data:/app/data
+
+  # REST API для панели и мини-приложения
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: blinvpn_api
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+
+  # Мини-приложение (React)
+  miniapp:
+    build:
+      context: .
+      dockerfile: Dockerfile.miniapp
+    container_name: blinvpn_miniapp
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${MINIAPP_PORT:-9741}:3000"
+    env_file:
+      - .env
     depends_on:
-      backend:
-        condition: service_healthy
-    networks:
-      - fpbot-net
+      - api
+
+  # Панель управления (React)
+  panel:
+    build:
+      context: .
+      dockerfile: Dockerfile.panel
+    container_name: blinvpn_panel
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PANEL_PORT:-9742}:3000"
+    env_file:
+      - .env
+    depends_on:
+      - api
+
+  # Certbot для SSL сертификатов (запускается только при необходимости)
+  # certbot:
+  #   image: certbot/certbot
+  #   container_name: blinvpn_certbot
+  #   volumes:
+  #     - /etc/letsencrypt:/etc/letsencrypt
+  #     - ./certbot:/var/www/certbot
+  #   command: certonly --webroot -w /var/www/certbot --keep-until-expiring --email ${SSL_EMAIL} --agree-tos --no-eff-email -d ${PANEL_DOMAIN} -d ${MINIAPP_DOMAIN} -d ${WEBHOOK_DOMAIN}
 
 volumes:
-  fpbot-data:
-    driver: local
+  data:
 
-networks:
-  fpbot-net:
-    driver: bridge
