@@ -359,6 +359,7 @@ async def create_lot_config(body: LotConfigCreate, user: dict = Depends(get_curr
             config.set_script_keywords(keywords or [])
             session.add(config)
             session.commit()
+            session.refresh(config)  # гарантирует наличие config.id в ответе
             return {
                 "id": config.id,
                 "script_type": config.script_type.value,
@@ -366,6 +367,7 @@ async def create_lot_config(body: LotConfigCreate, user: dict = Depends(get_curr
                 "lot_id": config.lot_id,
                 "lot_name": config.lot_name,
                 "lot_name_pattern": config.lot_name_pattern,
+                "script_custom_text": config.get_script_custom_text(),
             }
     except Exception as e:
         logger.exception("Ошибка при создании конфигурации скрипта")

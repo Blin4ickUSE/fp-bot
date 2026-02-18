@@ -179,7 +179,11 @@ export default function App() {
     try {
       const data = await api.getScriptTypes();
       setScriptTypes(Array.isArray(data) ? data : []);
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      console.error('[App] Failed to load script types:', e);
+      setScriptTypes([]);
+      setError('Не удалось загрузить типы скриптов. Обновите страницу.');
+    }
   };
 
   const loadAutomation = async () => {
@@ -229,11 +233,14 @@ export default function App() {
       return;
     }
     try {
+      setError(null);
       await api.createLot({ script_type: newLotScript, script_keywords: keywords });
       setNewLotScript('');
       setNewLotKeywords('');
       await loadLots();
-    } catch (e) { setError(e.message); }
+    } catch (e) {
+      setError(e.message || 'Не удалось добавить скрипт');
+    }
   };
 
   const handleDeleteLot = async (id) => {
@@ -715,11 +722,12 @@ export default function App() {
           <h1 className="text-xl font-black text-white tracking-tighter uppercase italic">Скрипты по ключевым словам</h1>
         </div>
 
-        {/* Добавить конфигурацию */}
+        {/* Добавить конфигурацию — можно несколько скриптов с разными ключевыми словами */}
         <div className="bg-zinc-900 border border-zinc-800/50 rounded-2xl p-4 space-y-3">
           <h3 className="text-[10px] font-black text-zinc-500 uppercase tracking-widest flex items-center gap-2">
             <Plus size={12} /> Добавить скрипт
           </h3>
+          <p className="text-[10px] text-zinc-500">Можно добавить несколько скриптов (один тип — несколько наборов ключевых слов).</p>
           <div>
             <label className="block text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-2 px-1">Скрипт</label>
             <select
