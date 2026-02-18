@@ -1,11 +1,26 @@
-aiogram==3.0.0
-requests==2.31.0
-flask==3.0.0
-flask-cors==4.0.0
-aiohttp>=3.8.5,<3.9
-httpx>=0.25.0
-pydantic>=2.0.0
-urllib3>=1.26.0,<2.0.0
-# Планировщик для автоматических бэкапов
-apscheduler>=3.10.0
-pytz>=2023.3
+# FunPay Manager — Python dependencies
+
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# Database
+sqlalchemy==2.0.36
+
+# HTTP client (used by FunPayAPI internally)
+requests==2.32.3
+requests-toolbelt==1.0.0
+aiohttp==3.11.11
+
+# Telegram bot
+python-telegram-bot==21.9
+
+# Configuration
+python-dotenv==1.0.1
+
+# HTML/XML parsing (used by FunPayAPI)
+beautifulsoup4==4.12.3
+lxml==5.3.0
+
+# Pydantic (comes with FastAPI, but pin version)
+pydantic==2.10.4
