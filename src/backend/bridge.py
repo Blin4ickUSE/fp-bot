@@ -476,29 +476,32 @@ class FunPayBridge:
     # ------------------------------------------------------------------
 
     def _match_script_type(self, order_shortcut) -> tuple[ScriptType, Optional[int]]:
-        """Определяет тип скрипта по заказу, сверяя с конфигурацией лотов.
-        Возвращает (script_type, lot_config_id).
-        """
+        """Определяет тип скрипта по заказу: ключевые слова или паттерн в описании. Возвращает (script_type, lot_config_id)."""
+        description = getattr(order_shortcut, 'description', None) or \
+                     getattr(order_shortcut, 'short_description', None) or \
+                     getattr(order_shortcut, 'full_description', None) or ""
+        desc_lower = description.lower()
+
         with get_session() as session:
             configs = session.query(LotConfig).all()
-            
-            # Сначала проверяем точное совпадение по lot_id (если есть в order_shortcut)
-            # В FunPayAPI order_shortcut может содержать lot_id
+
+            # 1) Совпадение по ключевым словам (приоритет)
+            for config in configs:
+                keywords = config.get_script_keywords()
+                if keywords and any(kw in desc_lower for kw in keywords):
+                    return config.script_type, config.id
+
+            # 2) Точное совпадение по lot_id
             if hasattr(order_shortcut, 'lot_id') and order_shortcut.lot_id:
                 for config in configs:
                     if config.lot_id and config.lot_id == order_shortcut.lot_id:
                         return config.script_type, config.id
-            
-            # Затем проверяем по паттерну названия
-            # В OrderShortcut может быть short_description или full_description
-            description = getattr(order_shortcut, 'description', None) or \
-                         getattr(order_shortcut, 'short_description', None) or \
-                         getattr(order_shortcut, 'full_description', None) or ""
-            desc_lower = description.lower()
+
+            # 3) Паттерн в названии (обратная совместимость)
             for config in configs:
                 if config.lot_name_pattern and config.lot_name_pattern.lower() in desc_lower:
                     return config.script_type, config.id
-            
+
             return ScriptType.NONE, None
 
     def _get_buyer_lang_from_funpay_api(self, chat_id) -> Optional[str]:

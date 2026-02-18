@@ -110,19 +110,34 @@ class OrderActionRequest(BaseModel):
     action: str  # "start", "complete", "refund"
 
 
+# Ключевые слова по умолчанию для каждого типа скрипта (для сопоставления с заказом/описанием)
+DEFAULT_SCRIPT_KEYWORDS = {
+    "spotify": ["spotify", "спотифай"],
+    "discord_nitro": ["discord", "дискорд", "nitro", "нитро"],
+    "chatgpt": ["chatgpt", "чатгпт", "openai"],
+    "netflix": ["netflix", "нетфликс"],
+    "claude": ["claude", "клод", "anthropic"],
+    "telegram_premium_1m": ["telegram premium 1", "тг премиум 1", "премиум 1 месяц", "premium 1 month"],
+    "telegram_premium_long": ["telegram premium 3", "telegram premium 6", "telegram premium 12", "тг премиум 3", "тг премиум 6", "тг премиум 12", "премиум 3", "премиум 6", "премиум 12"],
+    "telegram_stars": ["telegram stars", "тг старс", "tg stars", "stars"],
+}
+
+
 class LotConfigCreate(BaseModel):
-    lot_id: Optional[int] = None  # ID лота на FunPay
-    lot_name: Optional[str] = None  # Название лота
-    lot_name_pattern: Optional[str] = None  # Паттерн (если lot_id не указан)
     script_type: str
+    script_keywords: Optional[list[str]] = None  # Ключевые слова для срабатывания скрипта
+    lot_id: Optional[int] = None
+    lot_name: Optional[str] = None
+    lot_name_pattern: Optional[str] = None
 
 
 class LotConfigUpdate(BaseModel):
+    script_keywords: Optional[list[str]] = None
     lot_id: Optional[int] = None
     lot_name: Optional[str] = None
     lot_name_pattern: Optional[str] = None
     script_type: Optional[str] = None
-    script_custom_text: Optional[dict] = None  # Кастомный текст скрипта
+    script_custom_text: Optional[dict] = None
 
 
 class AutomationSettingsUpdate(BaseModel):
@@ -300,16 +315,17 @@ async def get_funpay_lots(
 
 @app.get("/api/lots")
 async def get_lot_configs(user: dict = Depends(get_current_user)):
-    """Получить список конфигураций лотов (привязок)."""
+    """Список конфигураций скриптов (по ключевым словам)."""
     with get_session() as session:
         configs = session.query(LotConfig).all()
         return [
             {
                 "id": c.id,
+                "script_type": c.script_type.value,
+                "script_keywords": c.get_script_keywords(),
                 "lot_id": c.lot_id,
                 "lot_name": c.lot_name,
                 "lot_name_pattern": c.lot_name_pattern,
-                "script_type": c.script_type.value,
                 "script_custom_text": c.get_script_custom_text(),
             }
             for c in configs
@@ -319,39 +335,33 @@ async def get_lot_configs(user: dict = Depends(get_current_user)):
 @app.post("/api/lots")
 async def create_lot_config(body: LotConfigCreate, user: dict = Depends(get_current_user)):
     with get_session() as session:
-        # Проверка: должен быть указан либо lot_id, либо lot_name_pattern
-        if not body.lot_id and not body.lot_name_pattern:
-            raise HTTPException(status_code=400, detail="Укажите либо ID лота, либо паттерн названия")
-        
-        # Проверка на дубликаты
-        if body.lot_id:
-            existing = session.query(LotConfig).filter(LotConfig.lot_id == body.lot_id).first()
-            if existing:
-                raise HTTPException(status_code=400, detail=f"Лот с ID {body.lot_id} уже настроен")
-        elif body.lot_name_pattern:
-            existing = session.query(LotConfig).filter(LotConfig.lot_name_pattern == body.lot_name_pattern).first()
-            if existing:
-                raise HTTPException(status_code=400, detail=f"Паттерн '{body.lot_name_pattern}' уже используется")
-        
         try:
             st = ScriptType(body.script_type)
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"Unknown script type: {body.script_type}")
-        
+            raise HTTPException(status_code=400, detail=f"Неизвестный тип скрипта: {body.script_type}")
+
+        keywords = body.script_keywords
+        if not keywords and body.script_type in DEFAULT_SCRIPT_KEYWORDS:
+            keywords = DEFAULT_SCRIPT_KEYWORDS[body.script_type]
+        if not keywords and not body.lot_id and not body.lot_name_pattern:
+            raise HTTPException(status_code=400, detail="Укажите ключевые слова или lot_id/паттерн")
+
         config = LotConfig(
+            script_type=st,
             lot_id=body.lot_id,
             lot_name=body.lot_name,
             lot_name_pattern=body.lot_name_pattern,
-            script_type=st
         )
+        config.set_script_keywords(keywords or [])
         session.add(config)
         session.commit()
         return {
             "id": config.id,
+            "script_type": config.script_type.value,
+            "script_keywords": config.get_script_keywords(),
             "lot_id": config.lot_id,
             "lot_name": config.lot_name,
             "lot_name_pattern": config.lot_name_pattern,
-            "script_type": config.script_type.value,
         }
 
 
@@ -360,8 +370,10 @@ async def update_lot_config(lot_id: int, body: LotConfigUpdate, user: dict = Dep
     with get_session() as session:
         config = session.query(LotConfig).filter(LotConfig.id == lot_id).first()
         if not config:
-            raise HTTPException(status_code=404, detail="Lot config not found")
-        
+            raise HTTPException(status_code=404, detail="Конфигурация не найдена")
+
+        if body.script_keywords is not None:
+            config.set_script_keywords(body.script_keywords)
         if body.lot_id is not None:
             config.lot_id = body.lot_id
         if body.lot_name is not None:
@@ -372,17 +384,18 @@ async def update_lot_config(lot_id: int, body: LotConfigUpdate, user: dict = Dep
             try:
                 config.script_type = ScriptType(body.script_type)
             except ValueError:
-                raise HTTPException(status_code=400, detail=f"Unknown script type: {body.script_type}")
+                raise HTTPException(status_code=400, detail=f"Неизвестный тип скрипта: {body.script_type}")
         if body.script_custom_text is not None:
             config.set_script_custom_text(body.script_custom_text)
-        
+
         session.commit()
         return {
             "id": config.id,
+            "script_type": config.script_type.value,
+            "script_keywords": config.get_script_keywords(),
             "lot_id": config.lot_id,
             "lot_name": config.lot_name,
             "lot_name_pattern": config.lot_name_pattern,
-            "script_type": config.script_type.value,
             "script_custom_text": config.get_script_custom_text(),
         }
 
@@ -497,9 +510,24 @@ async def get_chart_data(
 
 @app.get("/api/script-types")
 async def get_script_types(user: dict = Depends(get_current_user)):
+    labels = {
+        "spotify": "Spotify",
+        "discord_nitro": "Discord Nitro",
+        "chatgpt": "ChatGPT",
+        "netflix": "Netflix",
+        "claude": "Claude",
+        "telegram_premium_1m": "TG Premium 1 месяц",
+        "telegram_premium_long": "TG Premium 3/6/12 мес",
+        "telegram_stars": "TG Stars",
+    }
     return [
-        {"value": st.value, "label": st.value.replace("_", " ").title()}
+        {
+            "value": st.value,
+            "label": labels.get(st.value, st.value.replace("_", " ").title()),
+            "default_keywords": DEFAULT_SCRIPT_KEYWORDS.get(st.value, []),
+        }
         for st in ScriptType
+        if st != ScriptType.NONE
     ]
 
 

@@ -90,8 +90,8 @@ export default function App() {
   const [editingScriptText, setEditingScriptText] = useState(null);
   const [scriptMessageKeys, setScriptMessageKeys] = useState([]);
   const [scriptCustomTextEdit, setScriptCustomTextEdit] = useState({});
-  const [selectedFunpayLot, setSelectedFunpayLot] = useState(null);
-  const [newLotScript, setNewLotScript] = useState('none');
+  const [newLotScript, setNewLotScript] = useState('');
+  const [newLotKeywords, setNewLotKeywords] = useState('');
 
   // Telegram WebApp
   useEffect(() => {
@@ -114,9 +114,6 @@ export default function App() {
     } else if (activeTab === 'settings') {
       loadLots();
       loadScriptTypes();
-      if (settingsView === 'lots') {
-        loadFunpayLots(true);
-      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, settingsView]);
@@ -181,7 +178,7 @@ export default function App() {
   const loadScriptTypes = async () => {
     try {
       const data = await api.getScriptTypes();
-      setScriptTypes(data);
+      setScriptTypes(Array.isArray(data) ? data : []);
     } catch (e) { /* ignore */ }
   };
 
@@ -218,19 +215,23 @@ export default function App() {
   };
 
   const handleAddLot = async () => {
-    if (!selectedFunpayLot) {
-      setError('Выберите лот');
+    if (!newLotScript) {
+      setError('Выберите скрипт');
+      return;
+    }
+    const keywords = newLotKeywords.split(/[,;]+/).map(s => s.trim()).filter(Boolean);
+    if (keywords.length === 0) {
+      const st = (scriptTypes || []).find(s => s.value === newLotScript);
+      if (st?.default_keywords?.length) keywords.push(...st.default_keywords);
+    }
+    if (keywords.length === 0) {
+      setError('Введите ключевые слова (через запятую)');
       return;
     }
     try {
-      const data = {
-        lot_id: selectedFunpayLot.id,
-        lot_name: selectedFunpayLot.name,
-        script_type: newLotScript
-      };
-      await api.createLot(data);
-      setSelectedFunpayLot(null);
-      setNewLotScript('none');
+      await api.createLot({ script_type: newLotScript, script_keywords: keywords });
+      setNewLotScript('');
+      setNewLotKeywords('');
       await loadLots();
     } catch (e) { setError(e.message); }
   };
@@ -664,8 +665,8 @@ export default function App() {
   };
 
   const renderLotsSubView = () => {
-    // Безопасная проверка на массив
-    const allLots = Array.isArray(funpayLots) ? funpayLots : [];
+    const safeScriptTypes = Array.isArray(scriptTypes) ? scriptTypes : [];
+    const safeLots = Array.isArray(lots) ? lots : [];
 
     return (
       <div className="space-y-6 animate-slide-right">
@@ -673,105 +674,71 @@ export default function App() {
           <button onClick={() => setSettingsView('main')} className="p-2 bg-zinc-900 rounded-xl border border-zinc-800 text-white active:scale-90 transition-all">
             <ChevronLeft size={18} />
           </button>
-          <h1 className="text-xl font-black text-white tracking-tighter uppercase italic">Конфигурация лотов</h1>
+          <h1 className="text-xl font-black text-white tracking-tighter uppercase italic">Скрипты по ключевым словам</h1>
         </div>
 
-        {/* Добавить новый */}
+        {/* Добавить конфигурацию */}
         <div className="bg-zinc-900 border border-zinc-800/50 rounded-2xl p-4 space-y-3">
           <h3 className="text-[10px] font-black text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-            <Plus size={12} /> Добавить привязку
+            <Plus size={12} /> Добавить скрипт
           </h3>
-          
-          {/* Выбор лота - выпадающий список */}
-          <div className="relative">
-            <label className="block text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-2 px-1">
-              Выберите лот
-            </label>
+          <div>
+            <label className="block text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-2 px-1">Скрипт</label>
             <select
-              value={selectedFunpayLot?.id || ''}
+              value={newLotScript}
               onChange={(e) => {
-                const lotId = e.target.value;
-                if (lotId) {
-                  const lot = allLots.find(l => l.id == lotId);
-                  setSelectedFunpayLot(lot || null);
-                } else {
-                  setSelectedFunpayLot(null);
-                }
+                const v = e.target.value;
+                setNewLotScript(v);
+                const st = safeScriptTypes.find(s => s.value === v);
+                if (st?.default_keywords?.length) setNewLotKeywords(st.default_keywords.join(', '));
+                else setNewLotKeywords('');
               }}
               className="w-full bg-black border border-zinc-800 rounded-xl py-3 px-4 text-xs font-bold text-white focus:outline-none focus:border-zinc-600 transition-all"
             >
-              <option value="">-- Выберите лот --</option>
-              {allLots.map(lot => (
-                <option key={lot.id} value={lot.id}>
-                  {lot.name} ({lot.category_name} → {lot.subcategory_name}) - {lot.price} {lot.currency}
-                </option>
+              <option value="">— Выберите скрипт —</option>
+              {safeScriptTypes.map(st => (
+                <option key={st.value} value={st.value}>{st.label}</option>
               ))}
             </select>
-            {loading && allLots.length === 0 && (
-              <p className="text-[10px] text-zinc-500 mt-2 text-center">Загрузка лотов...</p>
-            )}
-            {!loading && allLots.length === 0 && (
-              <p className="text-[10px] text-zinc-500 mt-2 text-center">Лоты не найдены. Убедитесь, что бот подключён к FunPay, и нажмите «Обновить».</p>
-            )}
-            <button
-              type="button"
-              onClick={() => loadFunpayLots(true)}
-              disabled={loading}
-              className="mt-2 w-full py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 rounded-xl text-[10px] font-bold uppercase flex items-center justify-center gap-2"
-            >
-              <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Обновить список лотов
-            </button>
           </div>
-
-          {/* Выбранный лот */}
-          {selectedFunpayLot && (
-            <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
-              <p className="text-[10px] font-black text-emerald-400 uppercase tracking-widest mb-1">Выбранный лот</p>
-              <p className="text-xs font-bold text-white">{selectedFunpayLot.name}</p>
-              <p className="text-[10px] text-zinc-400 mt-1">{selectedFunpayLot.category_name} → {selectedFunpayLot.subcategory_name}</p>
-            </div>
-          )}
-
-          {/* Выбор скрипта */}
-          <select
-            value={newLotScript}
-            onChange={(e) => setNewLotScript(e.target.value)}
-            className="w-full bg-black border border-zinc-800 rounded-xl py-3 px-4 text-xs font-bold text-white focus:outline-none focus:border-zinc-600 transition-all"
-          >
-            <option value="none">Без скрипта</option>
-            {scriptTypes.filter(st => st.value !== 'none').map(st => (
-              <option key={st.value} value={st.value}>{st.label}</option>
-            ))}
-          </select>
-
+          <div>
+            <label className="block text-[9px] font-black text-zinc-500 uppercase tracking-widest mb-2 px-1">Ключевые слова (в заказе/описании)</label>
+            <input
+              type="text"
+              value={newLotKeywords}
+              onChange={(e) => setNewLotKeywords(e.target.value)}
+              placeholder="spotify, спотифай"
+              className="w-full bg-black border border-zinc-800 rounded-xl py-3 px-4 text-xs font-bold text-white placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600"
+            />
+          </div>
           <button
             onClick={handleAddLot}
-            disabled={!selectedFunpayLot}
+            disabled={!newLotScript}
             className="w-full py-3 bg-white text-black rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Добавить
           </button>
         </div>
 
-        {/* Список настроенных лотов */}
+        {/* Список конфигураций */}
         <div className="space-y-3">
-          <h3 className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1">Настроенные привязки</h3>
-          {lots.map(lot => (
+          <h3 className="text-[10px] font-black text-zinc-500 uppercase tracking-widest px-1">Настроенные скрипты</h3>
+          {safeLots.map(lot => (
             <div key={lot.id} className="bg-zinc-900 border border-zinc-800/50 rounded-2xl p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex-1">
                   <h3 className="text-xs font-black text-white uppercase tracking-tight">
-                    {lot.lot_name || lot.lot_name_pattern || `Лот #${lot.lot_id || '?'}`}
+                    {(safeScriptTypes.find(s => s.value === lot.script_type) || {}).label || (lot.script_type || '').replace(/_/g, ' ')}
                   </h3>
-                  <div className="flex gap-2 mt-1">
-                    <Badge variant={lot.script_type !== 'none' ? 'white' : 'gray'}>
-                      {lot.script_type === 'none' ? 'Без скрипта' : lot.script_type.replace(/_/g, ' ')}
-                    </Badge>
-                    {lot.lot_id && <Badge variant="blue">ID: {lot.lot_id}</Badge>}
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    <Badge variant="white">{lot.script_type || '—'}</Badge>
+                    {(lot.script_keywords || []).map((kw, i) => (
+                      <Badge key={i} variant="blue">{kw}</Badge>
+                    ))}
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  {lot.script_type !== 'none' && (
+                  {lot.script_type && (
                     <button
                       onClick={async () => {
                         if (editingScriptText === lot.id) {
@@ -812,61 +779,79 @@ export default function App() {
               
               {editingLot === lot.id ? (
                 <div className="space-y-2 animate-fade-in">
-                  <select
-                    defaultValue={lot.script_type}
-                    onChange={(e) => handleUpdateLot(lot.id, { script_type: e.target.value })}
-                    className="w-full bg-black border border-zinc-800 rounded-xl py-2 px-3 text-xs font-bold text-white focus:outline-none"
-                  >
-                    <option value="none">Без скрипта</option>
-                    {scriptTypes.filter(st => st.value !== 'none').map(st => (
-                      <option key={st.value} value={st.value}>{st.label}</option>
-                    ))}
-                  </select>
+                  <div>
+                    <label className="text-[9px] text-zinc-500 block mb-1">Скрипт</label>
+                    <select
+                      value={lot.script_type}
+                      onChange={(e) => handleUpdateLot(lot.id, { script_type: e.target.value })}
+                      className="w-full bg-black border border-zinc-800 rounded-xl py-2 px-3 text-xs font-bold text-white focus:outline-none"
+                    >
+                      {safeScriptTypes.map(st => (
+                        <option key={st.value} value={st.value}>{st.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[9px] text-zinc-500 block mb-1">Ключевые слова</label>
+                    <input
+                      type="text"
+                      defaultValue={(lot.script_keywords || []).join(', ')}
+                      onBlur={(e) => {
+                        const kw = e.target.value.split(/[,;]+/).map(s => s.trim()).filter(Boolean);
+                        if (kw.length) handleUpdateLot(lot.id, { script_keywords: kw });
+                      }}
+                      className="w-full bg-black border border-zinc-800 rounded-xl py-2 px-3 text-xs text-white focus:outline-none"
+                      placeholder="через запятую"
+                    />
+                  </div>
                   <button
                     onClick={() => setEditingLot(null)}
                     className="w-full py-2 bg-zinc-800 text-white rounded-xl text-[10px] font-black uppercase"
                   >
-                    Сохранить
+                    Закрыть
                   </button>
                 </div>
               ) : editingScriptText === lot.id ? (
                 <div className="space-y-4 animate-fade-in pt-2 border-t border-zinc-800">
                   <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Тексты сообщений скрипта</p>
-                  {scriptMessageKeys.length === 0 ? (
+                  {(scriptMessageKeys || []).length === 0 ? (
                     <p className="text-[10px] text-zinc-500">Загрузка ключей…</p>
                   ) : (
                     <div className="space-y-4 max-h-96 overflow-y-auto">
-                      {scriptMessageKeys.map(({ key, label_ru }) => (
-                        <div key={key} className="space-y-2 p-3 bg-black/40 rounded-xl border border-zinc-800/50">
-                          <p className="text-[9px] font-black text-zinc-500 uppercase tracking-wider">{label_ru} ({key})</p>
-                          <div className="grid grid-cols-2 gap-2">
-                            <div>
-                              <label className="text-[8px] text-zinc-600 block mb-1">RU</label>
-                              <textarea
-                                value={(scriptCustomTextEdit[key] || {}).ru || ''}
-                                onChange={(e) => setScriptCustomTextEdit(prev => ({
-                                  ...prev,
-                                  [key]: { ...(prev[key] || {}), ru: e.target.value },
-                                }))}
-                                rows={2}
-                                className="w-full bg-black border border-zinc-800 rounded-lg py-1.5 px-2 text-[11px] text-white focus:outline-none focus:border-blue-500 resize-none"
-                              />
-                            </div>
-                            <div>
-                              <label className="text-[8px] text-zinc-600 block mb-1">EN</label>
-                              <textarea
-                                value={(scriptCustomTextEdit[key] || {}).en || ''}
-                                onChange={(e) => setScriptCustomTextEdit(prev => ({
-                                  ...prev,
-                                  [key]: { ...(prev[key] || {}), en: e.target.value },
-                                }))}
-                                rows={2}
-                                className="w-full bg-black border border-zinc-800 rounded-lg py-1.5 px-2 text-[11px] text-white focus:outline-none focus:border-blue-500 resize-none"
-                              />
+                      {(scriptMessageKeys || []).map((item) => {
+                        const k = item.key || '';
+                        return (
+                          <div key={k} className="space-y-2 p-3 bg-black/40 rounded-xl border border-zinc-800/50">
+                            <p className="text-[9px] font-black text-zinc-500 uppercase tracking-wider">{(item.label_ru || k)} ({k})</p>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="text-[8px] text-zinc-600 block mb-1">RU</label>
+                                <textarea
+                                  value={(scriptCustomTextEdit[k] || {}).ru || ''}
+                                  onChange={(e) => setScriptCustomTextEdit(prev => ({
+                                    ...prev,
+                                    [k]: { ...(prev[k] || {}), ru: e.target.value },
+                                  }))}
+                                  rows={2}
+                                  className="w-full bg-black border border-zinc-800 rounded-lg py-1.5 px-2 text-[11px] text-white focus:outline-none focus:border-blue-500 resize-none"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[8px] text-zinc-600 block mb-1">EN</label>
+                                <textarea
+                                  value={(scriptCustomTextEdit[k] || {}).en || ''}
+                                  onChange={(e) => setScriptCustomTextEdit(prev => ({
+                                    ...prev,
+                                    [k]: { ...(prev[k] || {}), en: e.target.value },
+                                  }))}
+                                  rows={2}
+                                  className="w-full bg-black border border-zinc-800 rounded-lg py-1.5 px-2 text-[11px] text-white focus:outline-none focus:border-blue-500 resize-none"
+                                />
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                   <div className="flex gap-2">
@@ -908,10 +893,10 @@ export default function App() {
               )}
             </div>
           ))}
-          {lots.length === 0 && (
+          {safeLots.length === 0 && (
             <div className="py-10 text-center">
               <Package size={32} className="text-zinc-800 mx-auto mb-3" />
-              <p className="text-[10px] text-zinc-600 font-bold uppercase">Нет привязок. Добавьте первую выше.</p>
+              <p className="text-[10px] text-zinc-600 font-bold uppercase">Нет настроенных скриптов. Добавьте скрипт и ключевые слова выше.</p>
             </div>
           )}
         </div>
@@ -937,7 +922,6 @@ export default function App() {
                 setSettingsView('lots');
                 loadLots();
                 loadScriptTypes();
-                loadFunpayLots(true);
               }}
               className="w-full flex items-center justify-between p-5 bg-black border border-zinc-800 rounded-2xl group active:scale-[0.98] transition-all"
             >
@@ -945,7 +929,7 @@ export default function App() {
                 <div className="w-8 h-8 rounded-lg bg-zinc-800 flex items-center justify-center text-zinc-400 group-hover:text-white transition-colors">
                   <Package size={18} />
                 </div>
-                <span className="text-xs font-black text-white uppercase tracking-widest">Конфигурация лотов</span>
+                <span className="text-xs font-black text-white uppercase tracking-widest">Скрипты по ключевым словам</span>
               </div>
               <div className="text-[10px] font-black text-zinc-600 uppercase tracking-widest group-hover:text-zinc-400 transition-colors">
                 {lots.length} →

@@ -131,212 +131,138 @@ class SpotifyScript(BaseScript):
         return ScriptResponse(message_ru=ru, message_en=en, new_state=state)
 
 
+# Дефолты для скриптов «логин + пароль» (Discord, ChatGPT, Netflix, Claude) — те же ключи, что у Spotify
+def _login_password_defaults(name_ru: str, name_en: str) -> dict:
+    return {
+        "start": {
+            "ru": f"🧡 Для выполнения заказа отправьте почту, привязанную к {name_ru} 🍂",
+            "en": f"🧡 To complete your order, please send the email linked to your {name_en} account 🍂",
+        },
+        "wait_email_error": {
+            "ru": f"❓️ Кажется, это не почта. Нужна почта в формате example@example.com, на которую зарегистрирован {name_ru}.",
+            "en": f"❓️ This doesn't look like an email. Please send the email registered to your {name_en} account in format: example@example.com",
+        },
+        "wait_password": {
+            "ru": f"🥮 Отлично. Теперь отправьте пароль от аккаунта {name_ru}.",
+            "en": f"🥮 Great. Now please send your {name_en} account password.",
+        },
+        "wait_confirm_prompt": {
+            "ru": "🍁 Проверьте данные:\n\nПочта: {email}\nПароль: {password}\n\nЕсли верно — напишите +, если нет — -",
+            "en": "🍁 Check the details:\n\nEmail: {email}\nPassword: {password}\n\nIf correct — write +, if not — -",
+        },
+        "confirm_ok": {
+            "ru": "🧡 Данные переданы продавцу. Заказ будет выполнен в ближайшее время (10 мин – 10 ч). При ошибке в данных — вернём деньги.",
+            "en": "🧡 Data sent to the seller. Your order will be processed shortly (10 min – 10 h). If data was wrong, we'll refund.",
+        },
+        "confirm_retry": {
+            "ru": "🍂 Напишите + если данные верны, или - если нет.",
+            "en": "🍂 Write + if the data is correct, or - if not.",
+        },
+    }
+
+DISCORD_DEFAULTS = _login_password_defaults("Discord", "Discord")
+CHATGPT_DEFAULTS = _login_password_defaults("ChatGPT", "ChatGPT")
+NETFLIX_DEFAULTS = _login_password_defaults("Netflix", "Netflix")
+CLAUDE_DEFAULTS = _login_password_defaults("Claude", "Claude")
+
+
+def _process_login_password(state: dict, user_message: str, custom_text: dict, defaults: dict) -> ScriptResponse:
+    """Общая логика шагов wait_email → wait_password → wait_confirm для скриптов логин+пароль."""
+    step = state.get("step", "wait_email")
+    data = state.get("data", {})
+
+    if step == "wait_email":
+        msg = user_message.strip()
+        if not EMAIL_RE.match(msg):
+            ru, en = _override(custom_text, "wait_email_error", defaults["wait_email_error"]["ru"], defaults["wait_email_error"]["en"])
+            return ScriptResponse(message_ru=ru, message_en=en, new_state=state)
+        data["email"] = msg
+        ru, en = _override(custom_text, "wait_password", defaults["wait_password"]["ru"], defaults["wait_password"]["en"])
+        return ScriptResponse(message_ru=ru, message_en=en, new_state={"step": "wait_password", "data": data})
+
+    if step == "wait_password":
+        data["password"] = user_message.strip()
+        t = defaults["wait_confirm_prompt"]
+        ru = (custom_text.get("wait_confirm_prompt") or {}).get("ru") or t["ru"]
+        en = (custom_text.get("wait_confirm_prompt") or {}).get("en") or t["en"]
+        ru = ru.replace("{email}", data["email"]).replace("{password}", data["password"])
+        en = en.replace("{email}", data["email"]).replace("{password}", data["password"])
+        return ScriptResponse(message_ru=ru, message_en=en, new_state={"step": "wait_confirm", "data": data})
+
+    if step == "wait_confirm":
+        msg = user_message.strip()
+        if msg == "+":
+            ru, en = _override(custom_text, "confirm_ok", defaults["confirm_ok"]["ru"], defaults["confirm_ok"]["en"])
+            return ScriptResponse(message_ru=ru, message_en=en, finished=True, new_state={"step": "done", "data": data})
+        if msg == "-":
+            ru, en = _override(custom_text, "start", defaults["start"]["ru"], defaults["start"]["en"])
+            return ScriptResponse(message_ru=ru, message_en=en, new_state={"step": "wait_email", "data": {}})
+        ru, en = _override(custom_text, "confirm_retry", defaults["confirm_retry"]["ru"], defaults["confirm_retry"]["en"])
+        return ScriptResponse(message_ru=ru, message_en=en, new_state=state)
+
+    ru = (custom_text.get("wait") or {}).get("ru") or "⏳ Ожидайте, продавец скоро приступит к заказу."
+    en = (custom_text.get("wait") or {}).get("en") or "⏳ Please wait, the seller will process your order soon."
+    return ScriptResponse(message_ru=ru, message_en=en, new_state=state)
+
+
 # ---------------------------------------------------------------------------
-# Discord Nitro
+# Discord Nitro (логин + пароль, тексты как у Spotify)
 # ---------------------------------------------------------------------------
 
 class DiscordNitroScript(BaseScript):
     script_type = ScriptType.DISCORD_NITRO
 
     def start(self, custom_text: dict | None = None) -> ScriptResponse:
-        return ScriptResponse(
-            message_ru="🎮 Для выполнения заказа, отправьте вашу почту, привязанную к Discord",
-            message_en="🎮 To fulfill your order, please send your email address linked to Discord",
-            new_state={"step": "wait_email", "data": {}}
-        )
+        ru, en = _override(custom_text or {}, "start", DISCORD_DEFAULTS["start"]["ru"], DISCORD_DEFAULTS["start"]["en"])
+        return ScriptResponse(message_ru=ru, message_en=en, new_state={"step": "wait_email", "data": {}})
 
     def process(self, state: dict, user_message: str, custom_text: dict | None = None) -> ScriptResponse:
-        step = state.get("step", "wait_email")
-        data = state.get("data", {})
-
-        if step == "wait_email":
-            msg = user_message.strip()
-            if not EMAIL_RE.match(msg):
-                return ScriptResponse(
-                    message_ru=(
-                        "❓️ Кажется, это не почта…\n\n"
-                        "Мне понадобится почта вашего Discord-аккаунта в формате: example@example.com"
-                    ),
-                    message_en=(
-                        "❓️ It seems this isn't an email address…\n\n"
-                        "I need your Discord account email in this format: example@example.com"
-                    ),
-                    new_state=state
-                )
-            data["email"] = msg
-            return ScriptResponse(
-                message_ru="🔑 Отлично. Теперь отправьте пароль от вашего Discord-аккаунта",
-                message_en="🔑 Great. Now please send your Discord account password",
-                new_state={"step": "wait_password", "data": data}
-            )
-
-        if step == "wait_password":
-            data["password"] = user_message.strip()
-            return ScriptResponse(
-                message_ru=(
-                    "🔐 Если на вашем аккаунте включена двухфакторная аутентификация (2FA), "
-                    "отправьте код подтверждения.\n\n"
-                    "Если 2FA не включена, напишите: нет"
-                ),
-                message_en=(
-                    "🔐 If your account has two-factor authentication (2FA) enabled, "
-                    "please send the verification code.\n\n"
-                    "If 2FA is not enabled, write: no"
-                ),
-                new_state={"step": "wait_2fa", "data": data}
-            )
-
-        if step == "wait_2fa":
-            msg = user_message.strip().lower()
-            if msg not in ("нет", "no"):
-                data["2fa_code"] = user_message.strip()
-            return ScriptResponse(
-                message_ru=(
-                    f"📋 Проверьте данные:\n\n"
-                    f"Почта: {data['email']}\n"
-                    f"Пароль: {data['password']}\n"
-                    f"2FA: {data.get('2fa_code', 'нет')}\n\n"
-                    f"Если верно — напишите +, если нет — напишите -"
-                ),
-                message_en=(
-                    f"📋 Check the details:\n\n"
-                    f"Email: {data['email']}\n"
-                    f"Password: {data['password']}\n"
-                    f"2FA: {data.get('2fa_code', 'no')}\n\n"
-                    f"If correct — write +, if not — write -"
-                ),
-                new_state={"step": "wait_confirm", "data": data}
-            )
-
-        if step == "wait_confirm":
-            msg = user_message.strip()
-            if msg == "+":
-                return ScriptResponse(
-                    message_ru=(
-                        "🧡 Я передал данные продавцу!\n\n"
-                        "В ближайшее время он выполнит Ваш заказ (от 10 минут до 12 часов) "
-                        "и уведомит Вас.\n\n"
-                        "Если вы вдруг указали неверные данные — не переживайте. "
-                        "Когда продавец приступит к вашему заказу, он вернёт деньги."
-                    ),
-                    message_en=(
-                        "🧡 I've sent the information to the seller!\n\n"
-                        "They will process your order shortly (10 minutes to 12 hours) "
-                        "and notify you.\n\n"
-                        "If you entered incorrect information — don't worry. "
-                        "Once the seller processes your order, they will refund your money."
-                    ),
-                    finished=True,
-                    new_state={"step": "done", "data": data}
-                )
-            elif msg == "-":
-                return self.start()
-            else:
-                return ScriptResponse(
-                    message_ru="Напишите + если данные верны, или - если нет.",
-                    message_en="Write + if the data is correct, or - if not.",
-                    new_state=state
-                )
-
-        return ScriptResponse(
-            message_ru="⏳ Ожидайте, продавец скоро приступит к заказу.",
-            message_en="⏳ Please wait, the seller will process your order soon.",
-            new_state=state
-        )
+        return _process_login_password(state, user_message, custom_text or {}, DISCORD_DEFAULTS)
 
 
 # ---------------------------------------------------------------------------
-# ChatGPT
+# ChatGPT (логин + пароль, тексты как у Spotify)
 # ---------------------------------------------------------------------------
 
 class ChatGPTScript(BaseScript):
     script_type = ScriptType.CHATGPT
 
     def start(self, custom_text: dict | None = None) -> ScriptResponse:
-        return ScriptResponse(
-            message_ru="🤖 Для выполнения заказа, отправьте вашу почту от аккаунта ChatGPT (OpenAI)",
-            message_en="🤖 To fulfill your order, please send your ChatGPT (OpenAI) account email",
-            new_state={"step": "wait_email", "data": {}}
-        )
+        ru, en = _override(custom_text or {}, "start", CHATGPT_DEFAULTS["start"]["ru"], CHATGPT_DEFAULTS["start"]["en"])
+        return ScriptResponse(message_ru=ru, message_en=en, new_state={"step": "wait_email", "data": {}})
 
     def process(self, state: dict, user_message: str, custom_text: dict | None = None) -> ScriptResponse:
-        step = state.get("step", "wait_email")
-        data = state.get("data", {})
+        return _process_login_password(state, user_message, custom_text or {}, CHATGPT_DEFAULTS)
 
-        if step == "wait_email":
-            msg = user_message.strip()
-            if not EMAIL_RE.match(msg):
-                return ScriptResponse(
-                    message_ru=(
-                        "❓️ Кажется, это не почта…\n\n"
-                        "Мне понадобится почта вашего аккаунта OpenAI в формате: example@example.com"
-                    ),
-                    message_en=(
-                        "❓️ It seems this isn't an email address…\n\n"
-                        "I need your OpenAI account email in this format: example@example.com"
-                    ),
-                    new_state=state
-                )
-            data["email"] = msg
-            return ScriptResponse(
-                message_ru="🔑 Отлично. Теперь отправьте пароль от вашего аккаунта ChatGPT",
-                message_en="🔑 Great. Now please send your ChatGPT account password",
-                new_state={"step": "wait_password", "data": data}
-            )
 
-        if step == "wait_password":
-            data["password"] = user_message.strip()
-            return ScriptResponse(
-                message_ru=(
-                    f"📋 Проверьте данные:\n\n"
-                    f"Почта: {data['email']}\n"
-                    f"Пароль: {data['password']}\n\n"
-                    f"Если верно — напишите +, если нет — напишите -"
-                ),
-                message_en=(
-                    f"📋 Check the details:\n\n"
-                    f"Email: {data['email']}\n"
-                    f"Password: {data['password']}\n\n"
-                    f"If correct — write +, if not — write -"
-                ),
-                new_state={"step": "wait_confirm", "data": data}
-            )
+# ---------------------------------------------------------------------------
+# Netflix (логин + пароль)
+# ---------------------------------------------------------------------------
 
-        if step == "wait_confirm":
-            msg = user_message.strip()
-            if msg == "+":
-                return ScriptResponse(
-                    message_ru=(
-                        "🧡 Я передал данные продавцу!\n\n"
-                        "В ближайшее время он выполнит Ваш заказ (от 10 минут до 12 часов) "
-                        "и уведомит Вас.\n\n"
-                        "Если вы вдруг указали неверные данные — не переживайте. "
-                        "Когда продавец приступит к вашему заказу, он вернёт деньги."
-                    ),
-                    message_en=(
-                        "🧡 I've sent the information to the seller!\n\n"
-                        "They will process your order shortly (10 minutes to 12 hours) "
-                        "and notify you.\n\n"
-                        "If you entered incorrect information — don't worry. "
-                        "Once the seller processes your order, they will refund your money."
-                    ),
-                    finished=True,
-                    new_state={"step": "done", "data": data}
-                )
-            elif msg == "-":
-                return self.start()
-            else:
-                return ScriptResponse(
-                    message_ru="Напишите + если данные верны, или - если нет.",
-                    message_en="Write + if the data is correct, or - if not.",
-                    new_state=state
-                )
+class NetflixScript(BaseScript):
+    script_type = ScriptType.NETFLIX
 
-        return ScriptResponse(
-            message_ru="⏳ Ожидайте, продавец скоро приступит к заказу.",
-            message_en="⏳ Please wait, the seller will process your order soon.",
-            new_state=state
-        )
+    def start(self, custom_text: dict | None = None) -> ScriptResponse:
+        ru, en = _override(custom_text or {}, "start", NETFLIX_DEFAULTS["start"]["ru"], NETFLIX_DEFAULTS["start"]["en"])
+        return ScriptResponse(message_ru=ru, message_en=en, new_state={"step": "wait_email", "data": {}})
+
+    def process(self, state: dict, user_message: str, custom_text: dict | None = None) -> ScriptResponse:
+        return _process_login_password(state, user_message, custom_text or {}, NETFLIX_DEFAULTS)
+
+
+# ---------------------------------------------------------------------------
+# Claude (логин + пароль)
+# ---------------------------------------------------------------------------
+
+class ClaudeScript(BaseScript):
+    script_type = ScriptType.CLAUDE
+
+    def start(self, custom_text: dict | None = None) -> ScriptResponse:
+        ru, en = _override(custom_text or {}, "start", CLAUDE_DEFAULTS["start"]["ru"], CLAUDE_DEFAULTS["start"]["en"])
+        return ScriptResponse(message_ru=ru, message_en=en, new_state={"step": "wait_email", "data": {}})
+
+    def process(self, state: dict, user_message: str, custom_text: dict | None = None) -> ScriptResponse:
+        return _process_login_password(state, user_message, custom_text or {}, CLAUDE_DEFAULTS)
 
 
 # ---------------------------------------------------------------------------
@@ -559,6 +485,8 @@ SCRIPTS: dict[ScriptType, BaseScript] = {
     ScriptType.SPOTIFY: SpotifyScript(),
     ScriptType.DISCORD_NITRO: DiscordNitroScript(),
     ScriptType.CHATGPT: ChatGPTScript(),
+    ScriptType.NETFLIX: NetflixScript(),
+    ScriptType.CLAUDE: ClaudeScript(),
     ScriptType.TELEGRAM_PREMIUM_1M: TelegramPremium1MScript(),
     ScriptType.TELEGRAM_PREMIUM_LONG: TelegramPremiumLongScript(),
     ScriptType.TELEGRAM_STARS: TelegramStarsScript(),
@@ -570,27 +498,23 @@ def get_script(script_type: ScriptType) -> Optional[BaseScript]:
 
 
 # Ключи сообщений по типам скриптов (для UI редактирования)
+_COMMON_LOGIN_KEYS = [
+    {"key": "start", "label_ru": "Приветствие (запрос почты)", "label_en": "Greeting (email request)"},
+    {"key": "wait_email_error", "label_ru": "Ошибка: не почта", "label_en": "Error: not email"},
+    {"key": "wait_password", "label_ru": "Запрос пароля", "label_en": "Password request"},
+    {"key": "wait_confirm_prompt", "label_ru": "Проверка данных (+/-)", "label_en": "Check data (+/-)"},
+    {"key": "confirm_ok", "label_ru": "Данные приняты", "label_en": "Data accepted"},
+    {"key": "confirm_retry", "label_ru": "Повтор: напиши + или -", "label_en": "Retry: write + or -"},
+]
 SCRIPT_MESSAGE_KEYS: dict[str, list[dict]] = {
-    "spotify": [
-        {"key": "start", "label_ru": "Приветствие (запрос почты)", "label_en": "Greeting (email request)"},
-        {"key": "wait_email_error", "label_ru": "Ошибка: не почта", "label_en": "Error: not email"},
-        {"key": "wait_password", "label_ru": "Запрос пароля", "label_en": "Password request"},
-        {"key": "wait_confirm_prompt", "label_ru": "Проверка данных (+/-)", "label_en": "Check data (+/-)"},
-        {"key": "confirm_ok", "label_ru": "Данные приняты", "label_en": "Data accepted"},
-        {"key": "confirm_retry", "label_ru": "Повтор: напиши + или -", "label_en": "Retry: write + or -"},
-    ],
-    "discord_nitro": [
-        {"key": "start", "label_ru": "Приветствие", "label_en": "Greeting"},
-        {"key": "wait_email_error", "label_ru": "Ошибка почты", "label_en": "Email error"},
-        {"key": "wait_password", "label_ru": "Запрос пароля", "label_en": "Password request"},
-    ],
-    "chatgpt": [
-        {"key": "start", "label_ru": "Приветствие", "label_en": "Greeting"},
-        {"key": "wait_email_error", "label_ru": "Ошибка почты", "label_en": "Email error"},
-    ],
+    "spotify": _COMMON_LOGIN_KEYS.copy(),
+    "discord_nitro": _COMMON_LOGIN_KEYS.copy(),
+    "chatgpt": _COMMON_LOGIN_KEYS.copy(),
+    "netflix": _COMMON_LOGIN_KEYS.copy(),
+    "claude": _COMMON_LOGIN_KEYS.copy(),
     "telegram_premium_1m": [{"key": "start", "label_ru": "Приветствие", "label_en": "Greeting"}],
-    "telegram_premium_long": [{"key": "start", "label_ru": "Приветствие", "label_en": "Greeting"}],
-    "telegram_stars": [{"key": "start", "label_ru": "Приветствие", "label_en": "Greeting"}],
+    "telegram_premium_long": [{"key": "start", "label_ru": "Приветствие (username)", "label_en": "Greeting (username)"}],
+    "telegram_stars": [{"key": "start", "label_ru": "Приветствие (username)", "label_en": "Greeting (username)"}],
 }
 
 

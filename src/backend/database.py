@@ -41,6 +41,8 @@ class ScriptType(PyEnum):
     SPOTIFY = "spotify"
     DISCORD_NITRO = "discord_nitro"
     CHATGPT = "chatgpt"
+    NETFLIX = "netflix"
+    CLAUDE = "claude"
     TELEGRAM_PREMIUM_1M = "telegram_premium_1m"
     TELEGRAM_PREMIUM_LONG = "telegram_premium_long"     # 3/6/12 мес
     TELEGRAM_STARS = "telegram_stars"
@@ -49,25 +51,36 @@ class ScriptType(PyEnum):
 # ---------- Models ----------
 
 class LotConfig(Base):
-    """Конфигурация лота: какой скрипт привязан к какому лоту FunPay."""
+    """Конфигурация скрипта: ключевые слова в заказе/описании → тип скрипта."""
     __tablename__ = "lot_configs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    # ID лота на FunPay (если указан, используется точное совпадение)
-    lot_id = Column(Integer, nullable=True, index=True,
-                    comment="ID лота на FunPay (для точного совпадения)")
-    # Название лота (для отображения)
-    lot_name = Column(String(512), nullable=True,
-                      comment="Название лота для отображения")
-    # Паттерн для сопоставления лота (часть названия, используется если lot_id не указан)
-    lot_name_pattern = Column(String(512), nullable=True,
-                              comment="Подстрока в названии лота для сопоставления")
+    # Ключевые слова (JSON-массив строк): если любое есть в описании заказа — срабатывает этот скрипт
+    script_keywords = Column(Text, nullable=True,
+                             comment="JSON array of keywords for matching order description")
+    # Устаревшие поля (для обратной совместимости)
+    lot_id = Column(Integer, nullable=True, index=True)
+    lot_name = Column(String(512), nullable=True)
+    lot_name_pattern = Column(String(512), nullable=True)
     script_type = Column(Enum(ScriptType), default=ScriptType.NONE, nullable=False)
-    # Кастомный текст скрипта (JSON, переопределяет дефолтный)
     script_custom_text = Column(Text, nullable=True,
                                 comment="Кастомный текст скрипта (JSON: {step_id: {ru: ..., en: ...}})")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    def get_script_keywords(self) -> list:
+        """Список ключевых слов для сопоставления."""
+        if not self.script_keywords:
+            return []
+        try:
+            data = json.loads(self.script_keywords)
+            return [str(k).strip().lower() for k in (data if isinstance(data, list) else []) if k]
+        except json.JSONDecodeError:
+            return []
+
+    def set_script_keywords(self, keywords: list):
+        """Установить ключевые слова."""
+        self.script_keywords = json.dumps(keywords, ensure_ascii=False) if keywords else None
 
     def get_script_custom_text(self) -> dict:
         """Получить кастомный текст скрипта."""
@@ -83,6 +96,9 @@ class LotConfig(Base):
         self.script_custom_text = json.dumps(text, ensure_ascii=False) if text else None
 
     def __repr__(self):
+        kw = self.get_script_keywords()
+        if kw:
+            return f"<LotConfig keywords={kw} → {self.script_type.value}>"
         if self.lot_id:
             return f"<LotConfig lot_id={self.lot_id} → {self.script_type.value}>"
         return f"<LotConfig pattern={self.lot_name_pattern} → {self.script_type.value}>"
@@ -253,6 +269,13 @@ def init_db():
                         logger.info("Миграция: добавлено поле updated_at")
                     except Exception as e:
                         logger.warning(f"Не удалось добавить updated_at: {e}")
+
+                if 'script_keywords' not in columns:
+                    try:
+                        conn.execute(text("ALTER TABLE lot_configs ADD COLUMN script_keywords TEXT"))
+                        logger.info("Миграция: добавлено поле script_keywords")
+                    except Exception as e:
+                        logger.warning(f"Не удалось добавить script_keywords: {e}")
         # Миграция: review_delay_seconds в automation_settings
         try:
             inspector = inspect(engine)
