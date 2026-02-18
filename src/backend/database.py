@@ -102,6 +102,7 @@ class Order(Base):
     currency = Column(String(8), default="₽")
     status = Column(Enum(OrderStatus), default=OrderStatus.WAITING_DATA, nullable=False)
     script_type = Column(Enum(ScriptType), default=ScriptType.NONE, nullable=False)
+    lot_config_id = Column(Integer, nullable=True, index=True)
     # Текущий шаг скрипта: хранится как JSON {"step": "...", "data": {...}}
     script_state = Column(Text, default="{}")
     # Собранные данные пользователя (JSON)
@@ -263,6 +264,12 @@ def init_db():
                         logger.info("Миграция: добавлено поле review_delay_seconds")
         except Exception as e:
             logger.warning(f"Ошибка при проверке миграции automation_settings: {e}")
+        if inspector.has_table('orders'):
+            ocols = [col['name'] for col in inspector.get_columns('orders')]
+            if 'lot_config_id' not in ocols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE orders ADD COLUMN lot_config_id INTEGER"))
+                    logger.info("Миграция: добавлено поле orders.lot_config_id")
     except Exception as e:
         logger.warning(f"Ошибка при проверке миграций: {e}")
     

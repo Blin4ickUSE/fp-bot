@@ -45,7 +45,8 @@ export const orderAction = (id, action) =>
   request('POST', `/orders/${id}/action`, { action });
 
 // --- Lots ---
-export const getFunpayLots = () => request('GET', '/funpay-lots');
+export const getFunpayLots = (refresh = false) =>
+  request('GET', `/funpay-lots${refresh ? '?refresh=1' : ''}`);
 export const getLots = () => request('GET', '/lots');
 export const createLot = (data) => request('POST', '/lots', data);
 export const updateLot = (id, data) => request('PUT', `/lots/${id}`, data);
@@ -62,3 +63,5 @@ export const getChartData = (hours = 24) =>
 
 // --- Script types ---
 export const getScriptTypes = () => request('GET', '/script-types');
+export const getScriptMessageKeys = (scriptType) =>
+  request('GET', `/script-message-keys?script_type=${encodeURIComponent(scriptType)}`);

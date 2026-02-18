@@ -88,7 +88,8 @@ export default function App() {
   // Lot editor
   const [editingLot, setEditingLot] = useState(null);
   const [editingScriptText, setEditingScriptText] = useState(null);
-  const [scriptTextEditValue, setScriptTextEditValue] = useState('');
+  const [scriptMessageKeys, setScriptMessageKeys] = useState([]);
+  const [scriptCustomTextEdit, setScriptCustomTextEdit] = useState({});
   const [selectedFunpayLot, setSelectedFunpayLot] = useState(null);
   const [newLotScript, setNewLotScript] = useState('none');
 
@@ -114,7 +115,7 @@ export default function App() {
       loadLots();
       loadScriptTypes();
       if (settingsView === 'lots') {
-        loadFunpayLots();
+        loadFunpayLots(true);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -163,15 +164,15 @@ export default function App() {
     }
   };
 
-  const loadFunpayLots = async () => {
+  const loadFunpayLots = async (forceRefresh = false) => {
     try {
       setLoading(true);
-      const data = await api.getFunpayLots();
+      const data = await api.getFunpayLots(forceRefresh);
       setFunpayLots(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error('[App] Error loading FunPay lots:', e);
-      setFunpayLots([]); // Устанавливаем пустой массив при ошибке
-      // Не показываем ошибку пользователю, просто пустой список
+      setFunpayLots([]);
+      setError(e.message || 'Не удалось загрузить список лотов.');
     } finally {
       setLoading(false);
     }
@@ -714,7 +715,7 @@ export default function App() {
             )}
             <button
               type="button"
-              onClick={() => loadFunpayLots()}
+              onClick={() => loadFunpayLots(true)}
               disabled={loading}
               className="mt-2 w-full py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 rounded-xl text-[10px] font-bold uppercase flex items-center justify-center gap-2"
             >
@@ -772,13 +773,26 @@ export default function App() {
                 <div className="flex gap-2">
                   {lot.script_type !== 'none' && (
                     <button
-                      onClick={() => {
+                      onClick={async () => {
                         if (editingScriptText === lot.id) {
                           setEditingScriptText(null);
-                          setScriptTextEditValue('');
+                          setScriptMessageKeys([]);
+                          setScriptCustomTextEdit({});
                         } else {
                           setEditingScriptText(lot.id);
-                          setScriptTextEditValue(JSON.stringify(lot.script_custom_text || {}, null, 2));
+                          const custom = lot.script_custom_text || {};
+                          setScriptCustomTextEdit(
+                            Object.keys(custom).reduce((acc, k) => ({
+                              ...acc,
+                              [k]: { ru: custom[k]?.ru ?? '', en: custom[k]?.en ?? '' },
+                            }), {})
+                          );
+                          try {
+                            const res = await api.getScriptMessageKeys(lot.script_type);
+                            setScriptMessageKeys(res.keys || []);
+                          } catch (_) {
+                            setScriptMessageKeys([]);
+                          }
                         }
                       }}
                       className="p-2 text-zinc-600 hover:text-blue-400 transition-colors"
@@ -816,18 +830,48 @@ export default function App() {
                   </button>
                 </div>
               ) : editingScriptText === lot.id ? (
-                <div className="space-y-3 animate-fade-in pt-2 border-t border-zinc-800">
-                  <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Редактирование текста скрипта (JSON)</p>
-                  <textarea
-                    value={scriptTextEditValue}
-                    onChange={(e) => setScriptTextEditValue(e.target.value)}
-                    rows={6}
-                    className="w-full bg-black border border-zinc-800 rounded-xl py-2 px-3 text-[11px] font-mono text-white focus:outline-none focus:border-blue-500 resize-none"
-                  />
-                  <p className="text-[9px] text-zinc-600">Формат: {`{"step_id": {"ru": "текст", "en": "text"}}`}</p>
+                <div className="space-y-4 animate-fade-in pt-2 border-t border-zinc-800">
+                  <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Тексты сообщений скрипта</p>
+                  {scriptMessageKeys.length === 0 ? (
+                    <p className="text-[10px] text-zinc-500">Загрузка ключей…</p>
+                  ) : (
+                    <div className="space-y-4 max-h-96 overflow-y-auto">
+                      {scriptMessageKeys.map(({ key, label_ru }) => (
+                        <div key={key} className="space-y-2 p-3 bg-black/40 rounded-xl border border-zinc-800/50">
+                          <p className="text-[9px] font-black text-zinc-500 uppercase tracking-wider">{label_ru} ({key})</p>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="text-[8px] text-zinc-600 block mb-1">RU</label>
+                              <textarea
+                                value={(scriptCustomTextEdit[key] || {}).ru || ''}
+                                onChange={(e) => setScriptCustomTextEdit(prev => ({
+                                  ...prev,
+                                  [key]: { ...(prev[key] || {}), ru: e.target.value },
+                                }))}
+                                rows={2}
+                                className="w-full bg-black border border-zinc-800 rounded-lg py-1.5 px-2 text-[11px] text-white focus:outline-none focus:border-blue-500 resize-none"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[8px] text-zinc-600 block mb-1">EN</label>
+                              <textarea
+                                value={(scriptCustomTextEdit[key] || {}).en || ''}
+                                onChange={(e) => setScriptCustomTextEdit(prev => ({
+                                  ...prev,
+                                  [key]: { ...(prev[key] || {}), en: e.target.value },
+                                }))}
+                                rows={2}
+                                className="w-full bg-black border border-zinc-800 rounded-lg py-1.5 px-2 text-[11px] text-white focus:outline-none focus:border-blue-500 resize-none"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <div className="flex gap-2">
                     <button
-                      onClick={() => { setEditingScriptText(null); setScriptTextEditValue(''); }}
+                      onClick={() => { setEditingScriptText(null); setScriptMessageKeys([]); setScriptCustomTextEdit({}); }}
                       className="flex-1 py-2 bg-zinc-800 text-white rounded-xl text-[10px] font-black uppercase"
                     >
                       Закрыть
@@ -835,12 +879,18 @@ export default function App() {
                     <button
                       onClick={async () => {
                         try {
-                          const parsed = JSON.parse(scriptTextEditValue || '{}');
-                          await api.updateLot(lot.id, { script_custom_text: parsed });
+                          const toSend = {};
+                          Object.keys(scriptCustomTextEdit).forEach(k => {
+                            const v = scriptCustomTextEdit[k];
+                            if (v && ((v.ru || '').trim() || (v.en || '').trim()))
+                              toSend[k] = { ru: (v.ru || '').trim(), en: (v.en || '').trim() };
+                          });
+                          await api.updateLot(lot.id, { script_custom_text: toSend });
                           await loadLots();
                           setEditingScriptText(null);
-                          setScriptTextEditValue('');
-                        } catch (err) { setError('Неверный JSON: ' + (err.message || '')); }
+                          setScriptMessageKeys([]);
+                          setScriptCustomTextEdit({});
+                        } catch (err) { setError(err.message || 'Ошибка сохранения'); }
                       }}
                       className="flex-1 py-2 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase"
                     >
@@ -887,10 +937,7 @@ export default function App() {
                 setSettingsView('lots');
                 loadLots();
                 loadScriptTypes();
-                // Загружаем FunPay лоты только если список пустой
-                if (funpayLots.length === 0) {
-                  loadFunpayLots();
-                }
+                loadFunpayLots(true);
               }}
               className="w-full flex items-center justify-between p-5 bg-black border border-zinc-800 rounded-2xl group active:scale-[0.98] transition-all"
             >

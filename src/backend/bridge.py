@@ -170,6 +170,7 @@ class FunPayBridge:
                 currency=str(order_shortcut.currency),
                 status=OrderStatus.WAITING_DATA if script_type != ScriptType.NONE else OrderStatus.DATA_COLLECTED,
                 script_type=script_type,
+                lot_config_id=lot_config_id,
                 buyer_lang=buyer_lang,
             )
             session.add(db_order)
@@ -188,9 +189,17 @@ class FunPayBridge:
         if script_type != ScriptType.NONE:
             script = get_script(script_type)
             if script:
-                response = script.start()
+                custom_text = {}
+                if lot_config_id:
+                    with get_session() as session:
+                        lot_config = session.query(LotConfig).filter(LotConfig.id == lot_config_id).first()
+                        if lot_config:
+                            custom_text = lot_config.get_script_custom_text() or {}
+                response = script.start(custom_text=custom_text)
                 msg = response.message_ru if buyer_lang == "ru" else response.message_en
-                self._send_fp_message(str(order_shortcut.chat_id), msg)
+                if (msg or "").strip():
+                    self._send_fp_message(str(order_shortcut.chat_id), msg)
+                    logger.info(f"Скрипт start: отправлено сообщение в чат {order_shortcut.chat_id}")
                 # Обновляем состояние скрипта
                 with get_session() as session:
                     db_order = session.query(Order).filter(
@@ -264,11 +273,17 @@ class FunPayBridge:
 
         # Ищем активный заказ от этого покупателя, ожидающий данных
         chat_id = str(message.chat_id)
+        author_id = getattr(message, "author_id", None) or getattr(message, "interlocutor_id", None)
         with get_session() as session:
             db_order = session.query(Order).filter(
                 Order.chat_id == chat_id,
                 Order.status == OrderStatus.WAITING_DATA,
             ).order_by(Order.created_at.desc()).first()
+            if not db_order and author_id:
+                db_order = session.query(Order).filter(
+                    Order.buyer_id == int(author_id),
+                    Order.status == OrderStatus.WAITING_DATA,
+                ).order_by(Order.created_at.desc()).first()
 
             if not db_order:
                 # Нет активного скрипта — уведомляем о новом сообщении и предлагаем перейти в чат
@@ -288,18 +303,16 @@ class FunPayBridge:
 
             state = db_order.get_script_state()
             if state.get("step") == "done":
-                # Скрипт завершён — любое новое сообщение от покупателя уведомляем
-                if not message.type or message.type == MessageTypes.NON_SYSTEM:
-                    author = getattr(message, 'author_name', None) or db_order.buyer_username or "Покупатель"
-                    link = FUNPAY_CHAT_URL_TEMPLATE.format(chat_id=chat_id)
-                    self.notify_telegram(
-                        f"💬 Вам написали на FunPay!\n\n"
-                        f"От: {author}\n\n"
-                        f"Перейти в чат: {link}"
-                    )
+                # Скрипт завершён, но заказ ещё в сборе данных — не отправляем «Вам написали»
                 return
 
-            response = script.process(state, message.text or "")
+            custom_text = {}
+            if getattr(db_order, "lot_config_id", None):
+                lot_config = session.query(LotConfig).filter(LotConfig.id == db_order.lot_config_id).first()
+                if lot_config:
+                    custom_text = lot_config.get_script_custom_text() or {}
+
+            response = script.process(state, message.text or "", custom_text=custom_text)
 
             # Уточняем язык покупателя по тексту сообщения и сохраняем
             msg_text = (message.text or "").strip()
@@ -313,6 +326,7 @@ class FunPayBridge:
                 msg = response.message_en if db_order.buyer_lang == "ru" else response.message_ru
             if (msg or "").strip():
                 self._send_fp_message(chat_id, msg)
+                logger.info(f"Скрипт ответ: отправлено в чат {chat_id}, шаг {state.get('step')}")
 
             # Обновляем состояние
             if response.new_state:
@@ -418,10 +432,9 @@ class FunPayBridge:
                     if existing:
                         continue  # Уже есть в БД
                     
-                    script_type, _ = self._match_script_type(order_shortcut)
+                    script_type, lot_config_id = self._match_script_type(order_shortcut)
                     buyer_lang = self._detect_buyer_language(order_shortcut)
                     
-                    # Определяем статус на основе статуса в FunPay
                     if order_shortcut.status == OrderStatuses.PAID:
                         status = OrderStatus.WAITING_DATA if script_type != ScriptType.NONE else OrderStatus.DATA_COLLECTED
                     elif order_shortcut.status == OrderStatuses.CLOSED:
@@ -443,6 +456,7 @@ class FunPayBridge:
                         currency=str(order_shortcut.currency),
                         status=status,
                         script_type=script_type,
+                        lot_config_id=lot_config_id,
                         buyer_lang=buyer_lang,
                     )
                     session.add(db_order)

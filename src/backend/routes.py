@@ -233,65 +233,69 @@ _funpay_lots_cache_time = None
 FUNPAY_LOTS_CACHE_TTL = 3600  # 1 час
 
 @app.get("/api/funpay-lots")
-async def get_funpay_lots(user: dict = Depends(get_current_user)):
+async def get_funpay_lots(
+    refresh: bool = Query(False, description="Принудительно обновить список, игнорируя кэш"),
+    user: dict = Depends(get_current_user),
+):
     """Получить список всех лотов пользователя с FunPay (с кэшированием)."""
     global _funpay_lots_cache, _funpay_lots_cache_time
-    
-    # Проверяем кэш
-    import time
-    if _funpay_lots_cache is not None and _funpay_lots_cache_time:
+
+    if not refresh and _funpay_lots_cache is not None and _funpay_lots_cache_time:
         if time.time() - _funpay_lots_cache_time < FUNPAY_LOTS_CACHE_TTL:
             return _funpay_lots_cache
-    
+
     if not _funpay_bridge or not _funpay_bridge.account:
-        return []  # Возвращаем пустой массив вместо ошибки
-    
+        return []
+
     try:
         account = _funpay_bridge.account
+        # Если категории пустые — обновляем страницу аккаунта (get() подтягивает категории)
+        if not getattr(account, "categories", None) or not account.categories:
+            try:
+                account.get()
+            except Exception as e:
+                logger.warning(f"Не удалось обновить аккаунт при загрузке лотов: {e}")
+            if not getattr(account, "categories", None) or not account.categories:
+                logger.warning("Категории FunPay по-прежнему пусты после get()")
+                return []
+
         all_lots = []
-        
-        # Проверяем, что categories доступны
-        if not hasattr(account, 'categories') or not account.categories:
-            logger.warning("Категории не загружены")
-            return []
-        
-        # Проходим по всем категориям и подкатегориям
         for category in account.categories:
             try:
-                subcategories = category.get_subcategories() if hasattr(category, 'get_subcategories') else []
+                subcategories = category.get_subcategories() if hasattr(category, "get_subcategories") else []
                 for subcategory in subcategories:
                     try:
                         lots = account.get_my_subcategory_lots(subcategory.id)
                         for lot in lots:
+                            lot_id = getattr(lot, "id", None)
+                            if lot_id is None:
+                                lot_id = getattr(lot, "offer_id", getattr(lot, "lot_id", "?"))
                             all_lots.append({
-                                "id": lot.id,
-                                "name": lot.description or f"Лот #{lot.id}",
+                                "id": int(lot_id) if isinstance(lot_id, str) and lot_id.isdigit() else lot_id,
+                                "name": getattr(lot, "description", None) or getattr(lot, "short_description", None) or f"Лот #{lot_id}",
                                 "subcategory_id": subcategory.id,
-                                "subcategory_name": subcategory.name or "",
-                                "category_name": category.name or "",
-                                "price": lot.price,
-                                "currency": str(lot.currency),
-                                "amount": lot.amount,
-                                "server": lot.server,
-                                "side": lot.side,
+                                "subcategory_name": getattr(subcategory, "name", "") or "",
+                                "category_name": getattr(category, "name", "") or "",
+                                "price": getattr(lot, "price", 0),
+                                "currency": str(getattr(lot, "currency", "")),
+                                "amount": getattr(lot, "amount", None),
+                                "server": getattr(lot, "server", None),
+                                "side": getattr(lot, "side", None),
                             })
                     except Exception as e:
                         logger.warning(f"Не удалось получить лоты для подкатегории {subcategory.id}: {e}")
                         continue
             except Exception as e:
-                logger.warning(f"Ошибка при обработке категории {category.name if hasattr(category, 'name') else 'unknown'}: {e}")
+                logger.warning(f"Ошибка при обработке категории: {e}")
                 continue
-        
-        sorted_lots = sorted(all_lots, key=lambda x: x.get("name", ""))
-        
-        # Сохраняем в кэш
+
+        sorted_lots = sorted(all_lots, key=lambda x: (x.get("category_name", ""), x.get("name", "")))
         _funpay_lots_cache = sorted_lots
         _funpay_lots_cache_time = time.time()
-        
         return sorted_lots
     except Exception as e:
         logger.error(f"Ошибка получения лотов FunPay: {e}", exc_info=True)
-        return []  # Возвращаем пустой массив вместо ошибки
+        return []
 
 
 @app.get("/api/lots")
@@ -497,6 +501,17 @@ async def get_script_types(user: dict = Depends(get_current_user)):
         {"value": st.value, "label": st.value.replace("_", " ").title()}
         for st in ScriptType
     ]
+
+
+@app.get("/api/script-message-keys")
+async def get_script_message_keys(
+    script_type: str = Query(..., description="Тип скрипта (spotify, discord_nitro, ...)"),
+    user: dict = Depends(get_current_user),
+):
+    """Ключи сообщений скрипта для редактирования текстов."""
+    from .scripts import SCRIPT_MESSAGE_KEYS
+    keys = SCRIPT_MESSAGE_KEYS.get(script_type, [])
+    return {"script_type": script_type, "keys": keys}
 
 
 # ---------------------------------------------------------------------------
