@@ -327,42 +327,37 @@ def init_db():
     except Exception as e:
         logger.warning(f"Миграция script_keywords: {e}")
 
-    # Миграция: пересоздать lot_configs с nullable lot_name и lot_name_pattern (убрать NOT NULL и UNIQUE)
+    # Миграция: пересоздать lot_configs с nullable lot_name и lot_name_pattern (убрать NOT NULL и UNIQUE).
+    # Выполняется при каждом старте, если таблица есть — так схема всегда корректна.
     try:
         inspector = inspect(engine)
         if inspector.has_table('lot_configs'):
-            with engine.connect() as conn:
-                r = conn.execute(text("PRAGMA table_info(lot_configs)"))
-                rows = r.fetchall()
-                # SQLite: (cid, name, type, notnull, dflt_value, pk)
-                lot_name_pattern_info = next((r for r in rows if r[1] == 'lot_name_pattern'), None)
-                if lot_name_pattern_info is not None and lot_name_pattern_info[3] == 1:
-                    with conn.begin():
-                        conn.execute(text("""
-                            CREATE TABLE lot_configs_new (
-                                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-                                script_keywords TEXT,
-                                lot_id INTEGER,
-                                lot_name TEXT,
-                                lot_name_pattern TEXT,
-                                script_type VARCHAR(32) NOT NULL,
-                                script_custom_text TEXT,
-                                created_at DATETIME,
-                                updated_at DATETIME
-                            )
-                        """))
-                        conn.execute(text("""
-                            INSERT INTO lot_configs_new
-                            (id, script_keywords, lot_id, lot_name, lot_name_pattern, script_type, script_custom_text, created_at, updated_at)
-                            SELECT id, script_keywords, lot_id,
-                                   NULLIF(TRIM(lot_name), ''),
-                                   NULLIF(TRIM(lot_name_pattern), ''),
-                                   script_type, script_custom_text, created_at, updated_at
-                            FROM lot_configs
-                        """))
-                        conn.execute(text("DROP TABLE lot_configs"))
-                        conn.execute(text("ALTER TABLE lot_configs_new RENAME TO lot_configs"))
-                    logger.info("Миграция: lot_configs пересоздана (lot_name, lot_name_pattern nullable)")
+            with engine.begin() as conn:
+                conn.execute(text("""
+                    CREATE TABLE lot_configs_new (
+                        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                        script_keywords TEXT,
+                        lot_id INTEGER,
+                        lot_name TEXT,
+                        lot_name_pattern TEXT,
+                        script_type VARCHAR(32) NOT NULL,
+                        script_custom_text TEXT,
+                        created_at DATETIME,
+                        updated_at DATETIME
+                    )
+                """))
+                conn.execute(text("""
+                    INSERT INTO lot_configs_new
+                    (id, script_keywords, lot_id, lot_name, lot_name_pattern, script_type, script_custom_text, created_at, updated_at)
+                    SELECT id, script_keywords, lot_id,
+                           NULLIF(TRIM(COALESCE(lot_name, '')), ''),
+                           NULLIF(TRIM(COALESCE(lot_name_pattern, '')), ''),
+                           script_type, script_custom_text, created_at, updated_at
+                    FROM lot_configs
+                """))
+                conn.execute(text("DROP TABLE lot_configs"))
+                conn.execute(text("ALTER TABLE lot_configs_new RENAME TO lot_configs"))
+            logger.info("Миграция: lot_configs пересоздана (lot_name, lot_name_pattern nullable)")
     except Exception as e:
         logger.warning(f"Миграция lot_configs (nullable): {e}")
 
