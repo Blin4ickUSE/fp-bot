@@ -588,15 +588,53 @@ export default function App() {
                   </div>
                   <div className="space-y-2">
                     <label className="flex items-center gap-2 text-[9px] font-black text-zinc-500 uppercase tracking-widest px-1">
-                      <ListOrdered size={10} /> Лимит
+                      <ListOrdered size={10} /> Лимит заказов
                     </label>
                     <input
                       type="number"
+                      min={1}
+                      max={10}
                       value={automation.auto_confirm_max_orders || 5}
                       onChange={(e) => handleAutomationChange('auto_confirm_max_orders', parseInt(e.target.value) || 5)}
                       className="w-full bg-black border border-zinc-800 rounded-xl py-2 px-3 text-xs font-bold text-white focus:outline-none focus:border-blue-500 transition-colors"
                     />
                   </div>
+                  <div className="col-span-2 space-y-2">
+                    <label className="flex items-center gap-2 text-[9px] font-black text-zinc-500 uppercase tracking-widest px-1">
+                      <Timer size={10} /> Интервал проверки (мин)
+                    </label>
+                    <input
+                      type="number"
+                      min={5}
+                      value={automation.auto_ticket_interval_minutes ?? 60}
+                      onChange={(e) => handleAutomationChange('auto_ticket_interval_minutes', parseInt(e.target.value) || 60)}
+                      className="w-full bg-black border border-zinc-800 rounded-xl py-2 px-3 text-xs font-bold text-white focus:outline-none focus:border-blue-500 transition-colors"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-[9px] font-black text-zinc-500 uppercase tracking-widest px-1">
+                    Текст тикета (авто) — используйте {'{order_ids}'}
+                  </label>
+                  <textarea
+                    value={automation.auto_ticket_message ?? 'Пожалуйста, подтвердите заказы: {order_ids}'}
+                    onChange={(e) => handleAutomationChange('auto_ticket_message', e.target.value)}
+                    rows={2}
+                    placeholder="Пожалуйста, подтвердите заказы: {order_ids}"
+                    className="w-full bg-black border border-zinc-800 rounded-xl py-2 px-3 text-[11px] font-medium text-white placeholder:text-zinc-600 focus:outline-none focus:border-blue-500 transition-colors resize-none"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-[9px] font-black text-zinc-500 uppercase tracking-widest px-1">
+                    Текст тикета (ручная отправка) — используйте {'{order_id}'}
+                  </label>
+                  <textarea
+                    value={automation.manual_ticket_message ?? 'Подтвердите заказ: {order_id}'}
+                    onChange={(e) => handleAutomationChange('manual_ticket_message', e.target.value)}
+                    rows={2}
+                    placeholder="Подтвердите заказ: {order_id}"
+                    className="w-full bg-black border border-zinc-800 rounded-xl py-2 px-3 text-[11px] font-medium text-white placeholder:text-zinc-600 focus:outline-none focus:border-blue-500 transition-colors resize-none"
+                  />
                 </div>
               </div>
             )}

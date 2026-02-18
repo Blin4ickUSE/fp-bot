@@ -151,6 +151,9 @@ class AutomationSettingsUpdate(BaseModel):
     review_delay_seconds: Optional[int] = None
     review_message_ru: Optional[str] = None
     review_message_en: Optional[str] = None
+    auto_ticket_message: Optional[str] = None
+    manual_ticket_message: Optional[str] = None
+    auto_ticket_interval_minutes: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------

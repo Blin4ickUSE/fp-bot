@@ -199,6 +199,10 @@ class AutomationSettings(Base):
         "contact them via chat. In most cases, if something happens, "
         "we will restore your subscription free of charge."
     ))
+    # Авто-подтверждение: тикет в поддержку FunPay (как в плагине AutoTicket)
+    auto_ticket_message = Column(Text, default="Пожалуйста, подтвердите заказы: {order_ids}")
+    manual_ticket_message = Column(Text, default="Подтвердите заказ: {order_id}")
+    auto_ticket_interval_minutes = Column(Integer, default=60)
 
     def to_dict(self) -> dict:
         return {
@@ -212,6 +216,9 @@ class AutomationSettings(Base):
             "review_delay_seconds": getattr(self, "review_delay_seconds", 3),
             "review_message_ru": self.review_message_ru,
             "review_message_en": self.review_message_en,
+            "auto_ticket_message": getattr(self, "auto_ticket_message", "Пожалуйста, подтвердите заказы: {order_ids}"),
+            "manual_ticket_message": getattr(self, "manual_ticket_message", "Подтвердите заказ: {order_id}"),
+            "auto_ticket_interval_minutes": getattr(self, "auto_ticket_interval_minutes", 60),
         }
 
 
@@ -285,6 +292,18 @@ def init_db():
                     with engine.begin() as conn:
                         conn.execute(text("ALTER TABLE automation_settings ADD COLUMN review_delay_seconds INTEGER DEFAULT 3"))
                         logger.info("Миграция: добавлено поле review_delay_seconds")
+                for col_name, col_sql in [
+                    ("auto_ticket_message", "ALTER TABLE automation_settings ADD COLUMN auto_ticket_message TEXT DEFAULT 'Пожалуйста, подтвердите заказы: {order_ids}'"),
+                    ("manual_ticket_message", "ALTER TABLE automation_settings ADD COLUMN manual_ticket_message TEXT DEFAULT 'Подтвердите заказ: {order_id}'"),
+                    ("auto_ticket_interval_minutes", "ALTER TABLE automation_settings ADD COLUMN auto_ticket_interval_minutes INTEGER DEFAULT 60"),
+                ]:
+                    if col_name not in columns:
+                        try:
+                            with engine.begin() as conn:
+                                conn.execute(text(col_sql))
+                            logger.info(f"Миграция: добавлено поле automation_settings.{col_name}")
+                        except Exception as e:
+                            logger.warning(f"Миграция automation_settings.{col_name}: {e}")
         except Exception as e:
             logger.warning(f"Ошибка при проверке миграции automation_settings: {e}")
         if inspector.has_table('orders'):

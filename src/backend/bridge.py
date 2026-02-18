@@ -32,6 +32,7 @@ from .database import (
     AutomationSettings, StatsSnapshot,
 )
 from .scripts import get_script, STATUS_MESSAGES
+from .support_ticket import send_support_ticket
 
 logger = logging.getLogger("backend.bridge")
 
@@ -652,10 +653,11 @@ class FunPayBridge:
     # ------------------------------------------------------------------
 
     def _background_tasks(self):
-        """Фоновые задачи: вечный онлайн, автоподнятие, снимки статистики."""
+        """Фоновые задачи: вечный онлайн, автоподнятие, снимки статистики, авто-тикет в поддержку."""
         last_online_time = 0
         last_bump_time = 0
         last_stats_time = 0
+        last_auto_ticket_time = 0
         ONLINE_INTERVAL = 60 * 4       # каждые 4 минуты обновляем аккаунт
         BUMP_INTERVAL = 60 * 60 * 4    # каждые 4 часа автоподнятие
         STATS_INTERVAL = 60 * 60       # каждый час снимок статистики
@@ -708,10 +710,76 @@ class FunPayBridge:
                     except Exception as e:
                         logger.error(f"Ошибка снимка статистики: {e}")
 
+                # Авто-подтверждение: тикет в поддержку FunPay (просроченные заказы >= 24ч)
+                interval_sec = 60 * getattr(settings, "auto_ticket_interval_minutes", 60)
+                if (
+                    settings
+                    and getattr(settings, "auto_confirm", False)
+                    and (now - last_auto_ticket_time >= interval_sec)
+                    and self.account
+                    and FUNPAY_GOLDEN_KEY
+                ):
+                    try:
+                        old_order_ids = self._get_old_paid_order_ids(settings)
+                        if old_order_ids:
+                            msg_tpl = getattr(
+                                settings, "auto_ticket_message", "Пожалуйста, подтвердите заказы: {order_ids}"
+                            )
+                            if "{order_ids}" not in msg_tpl:
+                                msg_tpl = "Пожалуйста, подтвердите заказы: {order_ids}"
+                            ok, ticket_id = send_support_ticket(
+                                golden_key=FUNPAY_GOLDEN_KEY,
+                                user_agent=FUNPAY_USER_AGENT,
+                                username=self.account.username,
+                                order_ids=old_order_ids,
+                                message_template=msg_tpl,
+                                is_manual=False,
+                                locale=getattr(self.account, "locale", "ru") or "ru",
+                            )
+                            if ok:
+                                logger.info("Авто-тикет в поддержку отправлен для заказов %s", old_order_ids)
+                            else:
+                                logger.warning("Не удалось отправить авто-тикет для %s", old_order_ids)
+                        last_auto_ticket_time = now
+                    except Exception as e:
+                        logger.error(f"Ошибка авто-тикета в поддержку: {e}", exc_info=True)
+                        last_auto_ticket_time = now
+
             except Exception as e:
                 logger.error(f"Ошибка в фоновых задачах: {e}", exc_info=True)
 
             self._stop_event.wait(30)  # Проверяем каждые 30 секунд
+
+    def _get_old_paid_order_ids(self, settings: AutomationSettings) -> list:
+        """Возвращает список ID заказов в статусе paid старше 24 часов (для тикета в поддержку)."""
+        max_orders = getattr(settings, "auto_confirm_max_orders", 5) or 5
+        max_orders = min(max(1, max_orders), 10)
+        cutoff = datetime.datetime.now() - datetime.timedelta(hours=24)
+        old_with_date = []  # (id, date)
+        start_from = None
+        locale = None
+        subcs = None
+        try:
+            while True:
+                start_from, orders, locale, subcs = self.account.get_sales(
+                    start_from=start_from or "",
+                    state="paid",
+                    locale=locale,
+                    subcategories=subcs,
+                )
+                for o in orders:
+                    order_date = o.date if isinstance(o.date, datetime.datetime) else datetime.datetime.fromtimestamp(o.date)
+                    if order_date <= cutoff:
+                        old_with_date.append((str(o.id).lstrip("#"), order_date))
+                if not start_from:
+                    break
+                time.sleep(1)
+            # Сортируем по дате (старые первые), берём до max_orders
+            old_with_date.sort(key=lambda x: x[1])
+            return [oid for oid, _ in old_with_date[:max_orders]]
+        except Exception as e:
+            logger.warning("Ошибка загрузки заказов для авто-тикета: %s", e)
+            return []
 
     def _save_stats_snapshot(self):
         """Сохраняет снимок статистики."""
