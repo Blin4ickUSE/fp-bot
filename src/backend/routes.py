@@ -133,6 +133,7 @@ class AutomationSettingsUpdate(BaseModel):
     auto_confirm_max_orders: Optional[int] = None
     review_reminder: Optional[bool] = None
     review_delay_minutes: Optional[int] = None
+    review_delay_seconds: Optional[int] = None
     review_message_ru: Optional[str] = None
     review_message_en: Optional[str] = None
 
@@ -191,14 +192,9 @@ async def order_action(
         if action == "start":
             order.status = OrderStatus.IN_PROGRESS
             session.commit()
-            # Отправить сообщение покупателю
             if _funpay_bridge:
                 _funpay_bridge.send_status_message(order.chat_id, "order_started", order.buyer_lang)
-                _funpay_bridge.notify_telegram(
-                    f"▶️ Начато выполнение заказа #{order.funpay_order_id}\n"
-                    f"Покупатель: {order.buyer_username}\n"
-                    f"Товар: {order.item_name}"
-                )
+                # Уведомление о начале выполнения не отправляем (п.7)
             return {"ok": True, "order": order.to_dict()}
 
         elif action == "complete":
@@ -206,30 +202,21 @@ async def order_action(
             session.commit()
             if _funpay_bridge:
                 _funpay_bridge.send_status_message(order.chat_id, "order_completed", order.buyer_lang)
-                _funpay_bridge.notify_telegram(
-                    f"✅ Заказ #{order.funpay_order_id} выполнен!\n"
-                    f"Покупатель: {order.buyer_username}"
-                )
+                # Уведомление о выполнении не отправляем (п.7)
             return {"ok": True, "order": order.to_dict()}
 
         elif action == "refund":
-            # Сначала выполняем возврат через FunPay API
             if _funpay_bridge:
                 try:
                     _funpay_bridge.do_refund(order.funpay_order_id)
                 except Exception as e:
                     logger.error(f"Ошибка при возврате {order.funpay_order_id}: {e}")
                     raise HTTPException(status_code=500, detail=f"Ошибка возврата: {str(e)}")
-            
-            # Затем обновляем статус и отправляем сообщение
             order.status = OrderStatus.REFUNDED
             session.commit()
             if _funpay_bridge:
                 _funpay_bridge.send_status_message(order.chat_id, "order_cancelled", order.buyer_lang)
-                _funpay_bridge.notify_telegram(
-                    f"❌ Возврат по заказу #{order.funpay_order_id}\n"
-                    f"Покупатель: {order.buyer_username}"
-                )
+                # Уведомление о возврате не отправляем (п.7)
             return {"ok": True, "order": order.to_dict()}
 
         else:

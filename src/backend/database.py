@@ -164,7 +164,8 @@ class AutomationSettings(Base):
     auto_confirm_time = Column(String(8), default="12:00")
     auto_confirm_max_orders = Column(Integer, default=5)
     review_reminder = Column(Boolean, default=True)
-    review_delay_minutes = Column(Integer, default=1440)
+    review_delay_minutes = Column(Integer, default=1440)  # deprecated, use review_delay_seconds
+    review_delay_seconds = Column(Integer, default=3)  # задержка напоминания об отзыве в секундах
     review_message_ru = Column(Text, default=(
         "🫶 Пожалуйста, поставьте нам 5 звезд ⭐️\n\n"
         "Продавец старается выполнять все заказы быстро и качественно, "
@@ -191,6 +192,7 @@ class AutomationSettings(Base):
             "auto_confirm_max_orders": self.auto_confirm_max_orders,
             "review_reminder": self.review_reminder,
             "review_delay_minutes": self.review_delay_minutes,
+            "review_delay_seconds": getattr(self, "review_delay_seconds", 3),
             "review_message_ru": self.review_message_ru,
             "review_message_en": self.review_message_en,
         }
@@ -250,6 +252,17 @@ def init_db():
                         logger.info("Миграция: добавлено поле updated_at")
                     except Exception as e:
                         logger.warning(f"Не удалось добавить updated_at: {e}")
+        # Миграция: review_delay_seconds в automation_settings
+        try:
+            inspector = inspect(engine)
+            if inspector.has_table('automation_settings'):
+                columns = [col['name'] for col in inspector.get_columns('automation_settings')]
+                if 'review_delay_seconds' not in columns:
+                    with engine.begin() as conn:
+                        conn.execute(text("ALTER TABLE automation_settings ADD COLUMN review_delay_seconds INTEGER DEFAULT 3"))
+                        logger.info("Миграция: добавлено поле review_delay_seconds")
+        except Exception as e:
+            logger.warning(f"Ошибка при проверке миграции automation_settings: {e}")
     except Exception as e:
         logger.warning(f"Ошибка при проверке миграций: {e}")
     

@@ -5,6 +5,7 @@ FunPay Bridge — связывает FunPayAPI (события, чаты, зак
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 import datetime
@@ -18,6 +19,9 @@ from FunPayAPI.account import Account
 from FunPayAPI.updater.runner import Runner
 from FunPayAPI.updater import events as fp_events
 from FunPayAPI.common.enums import MessageTypes, OrderStatuses, EventTypes
+
+# URL чата FunPay (node = chat_id)
+FUNPAY_CHAT_URL_TEMPLATE = "https://funpay.com/chat/?node={chat_id}"
 
 from .config import FUNPAY_GOLDEN_KEY, FUNPAY_USER_AGENT
 from .database import (
@@ -217,10 +221,7 @@ class FunPayBridge:
                     db_order.status = OrderStatus.CONFIRMED
                     session.commit()
 
-                    # Уведомление в Telegram
-                    self.notify_telegram(
-                        f"✅ Заказ #{order_shortcut.id} подтверждён покупателем!"
-                    )
+                    # Уведомление о подтверждении не отправляем (п.7)
 
                     # Отправляем напоминание об отзыве
                     settings = session.query(AutomationSettings).first()
@@ -230,9 +231,7 @@ class FunPayBridge:
             elif order_shortcut.status == OrderStatuses.REFUNDED:
                 db_order.status = OrderStatus.REFUNDED
                 session.commit()
-                self.notify_telegram(
-                    f"💸 Возврат по заказу #{order_shortcut.id}"
-                )
+                # Уведомление о возврате не отправляем (п.7)
 
             # Если заказ открыт повторно (спор)
             elif order_shortcut.status == OrderStatuses.PAID:
@@ -257,9 +256,10 @@ class FunPayBridge:
         if message.by_bot:
             return
         if message.type and message.type != MessageTypes.NON_SYSTEM:
-            # Обрабатываем системное сообщение "покупатель подтвердил"
             if message.type == MessageTypes.ORDER_CONFIRMED:
                 self._handle_order_confirmed_message(message)
+            elif message.type in (MessageTypes.NEW_FEEDBACK, MessageTypes.FEEDBACK_CHANGED):
+                self._handle_review_message(message)
             return
 
         # Ищем активный заказ от этого покупателя, ожидающий данных
@@ -271,7 +271,16 @@ class FunPayBridge:
             ).order_by(Order.created_at.desc()).first()
 
             if not db_order:
-                return  # Нет активного скрипта для этого чата
+                # Нет активного скрипта — уведомляем о новом сообщении и предлагаем перейти в чат
+                if not message.type or message.type == MessageTypes.NON_SYSTEM:
+                    author = getattr(message, 'author_name', None) or getattr(message, 'chat_name', None) or "Покупатель"
+                    link = FUNPAY_CHAT_URL_TEMPLATE.format(chat_id=chat_id)
+                    self.notify_telegram(
+                        f"💬 Вам написали на FunPay!\n\n"
+                        f"От: {author}\n\n"
+                        f"Перейти в чат: {link}"
+                    )
+                return
 
             script = get_script(db_order.script_type)
             if not script:
@@ -279,13 +288,31 @@ class FunPayBridge:
 
             state = db_order.get_script_state()
             if state.get("step") == "done":
-                return  # Скрипт уже завершён
+                # Скрипт завершён — любое новое сообщение от покупателя уведомляем
+                if not message.type or message.type == MessageTypes.NON_SYSTEM:
+                    author = getattr(message, 'author_name', None) or db_order.buyer_username or "Покупатель"
+                    link = FUNPAY_CHAT_URL_TEMPLATE.format(chat_id=chat_id)
+                    self.notify_telegram(
+                        f"💬 Вам написали на FunPay!\n\n"
+                        f"От: {author}\n\n"
+                        f"Перейти в чат: {link}"
+                    )
+                return
 
             response = script.process(state, message.text or "")
 
-            # Отправляем ответ
+            # Уточняем язык покупателя по тексту сообщения и сохраняем
+            msg_text = (message.text or "").strip()
+            if msg_text:
+                detected = self._detect_lang_from_text(msg_text)
+                if db_order.buyer_lang != detected:
+                    db_order.buyer_lang = detected
+            # Отправляем ответ на языке покупателя (если пусто — используем другой язык)
             msg = response.message_ru if db_order.buyer_lang == "ru" else response.message_en
-            self._send_fp_message(chat_id, msg)
+            if not (msg or "").strip():
+                msg = response.message_en if db_order.buyer_lang == "ru" else response.message_ru
+            if (msg or "").strip():
+                self._send_fp_message(chat_id, msg)
 
             # Обновляем состояние
             if response.new_state:
@@ -309,10 +336,47 @@ class FunPayBridge:
             else:
                 session.commit()
 
+    def _get_my_rating(self) -> Optional[float]:
+        """Получает текущий рейтинг продавца (из страницы профиля). Возвращает None при ошибке."""
+        try:
+            if not self.account:
+                return None
+            user = self.account.get_user(self.account.id)
+            if not getattr(user, "html", None):
+                return None
+            from bs4 import BeautifulSoup
+            parser = BeautifulSoup(user.html, "lxml")
+            rating_el = parser.find("div", class_="rating-stars")
+            if rating_el:
+                stars = rating_el.find_all("i", class_="fas")
+                if stars:
+                    return float(len(stars))
+            return None
+        except Exception as e:
+            logger.debug(f"Не удалось получить рейтинг: {e}")
+            return None
+
+    def _handle_review_message(self, message):
+        """Уведомление об отзыве только если изменился общий рейтинг."""
+        def _check_rating_changed():
+            try:
+                rating_before = self._get_my_rating()
+                time.sleep(3)
+                rating_after = self._get_my_rating()
+                if rating_before is not None and rating_after is not None and rating_before != rating_after:
+                    order_match = re.search(r"#([A-Z0-9]{8})", message.text or "")
+                    order_id = order_match.group(1) if order_match else "?"
+                    self.notify_telegram(
+                        f"⭐ Изменился рейтинг! Был {rating_before}, стал {rating_after}\n"
+                        f"Заказ #{order_id}"
+                    )
+            except Exception as e:
+                logger.debug(f"Проверка рейтинга после отзыва: {e}")
+
+        threading.Thread(target=_check_rating_changed, daemon=True, name="ReviewRatingCheck").start()
+
     def _handle_order_confirmed_message(self, message):
         """Обработка системного сообщения о подтверждении заказа."""
-        # Ищем ID заказа в тексте сообщения
-        import re
         if not message.text:
             return
         match = re.search(r"#([A-Z0-9]{8})", message.text)
@@ -327,10 +391,8 @@ class FunPayBridge:
             if db_order and db_order.status not in (OrderStatus.REFUNDED,):
                 db_order.status = OrderStatus.CONFIRMED
                 session.commit()
-
-                settings = session.query(AutomationSettings).first()
-                if settings and settings.review_reminder:
-                    self._schedule_review_reminder(db_order, settings)
+                # Напоминание об отзыве планируется только в _on_order_status_changed (CLOSED), не здесь,
+                # чтобы не отправлять его дважды.
 
     # ------------------------------------------------------------------
     # Синхронизация существующих заказов
@@ -426,18 +488,26 @@ class FunPayBridge:
             return ScriptType.NONE, None
 
     def _detect_buyer_language(self, order_shortcut) -> str:
-        """Определяет язык покупателя.
-        Используем описание заказа или профиль.
-        """
-        # Простая эвристика: если в описании есть кириллица — ru, иначе en
+        """Определяет язык покупателя по описанию заказа (кириллица → ru, иначе en)."""
         desc = getattr(order_shortcut, 'description', None) or \
                getattr(order_shortcut, 'short_description', None) or \
                getattr(order_shortcut, 'full_description', None) or ""
-        cyrillic_count = sum(1 for c in desc if '\u0400' <= c <= '\u04ff')
-        if cyrillic_count > len(desc) * 0.3:
+        if desc:
+            cyrillic_count = sum(1 for c in desc if '\u0400' <= c <= '\u04ff')
+            if cyrillic_count > len(desc) * 0.2:
+                return "ru"
+            if cyrillic_count == 0 and len(desc) > 2:
+                return "en"
+        return "ru"
+
+    def _detect_lang_from_text(self, text: str) -> str:
+        """Определяет язык по тексту сообщения (кириллица → ru, иначе en)."""
+        if not (text or "").strip():
             return "ru"
-        # Попробуем определить по locale аккаунта (если доступно через чат)
-        return "ru"  # По умолчанию
+        cyrillic_count = sum(1 for c in text if '\u0400' <= c <= '\u04ff')
+        if cyrillic_count > len(text) * 0.3:
+            return "ru"
+        return "en"
 
     def _send_fp_message(self, chat_id: str, text: str):
         """Отправляет сообщение через FunPay."""
@@ -476,11 +546,11 @@ class FunPayBridge:
                 logger.error(f"Ошибка отправки в Telegram: {e}")
 
     def _schedule_review_reminder(self, db_order: Order, settings: AutomationSettings):
-        """Планирует отправку напоминания об отзыве."""
-        delay_minutes = settings.review_delay_minutes or 1440
+        """Планирует отправку напоминания об отзыве (задержка в секундах)."""
+        delay_seconds = getattr(settings, 'review_delay_seconds', None) or 3
 
         def _send_reminder():
-            time.sleep(delay_minutes * 60)
+            time.sleep(delay_seconds)
             # Проверяем, что заказ всё ещё подтверждён (не возвращён)
             with get_session() as session:
                 check_order = session.query(Order).filter(
@@ -488,7 +558,11 @@ class FunPayBridge:
                 ).first()
                 if check_order and check_order.status == OrderStatus.CONFIRMED:
                     lang = check_order.buyer_lang or "ru"
-                    self.send_status_message(check_order.chat_id, "review_reminder", lang)
+                    msg_ru = (settings.review_message_ru or "").strip() or STATUS_MESSAGES.get("review_reminder", {}).get("ru", "")
+                    msg_en = (settings.review_message_en or "").strip() or STATUS_MESSAGES.get("review_reminder", {}).get("en", "")
+                    msg = msg_ru if lang == "ru" else msg_en
+                    if msg:
+                        self._send_fp_message(check_order.chat_id, msg)
                     logger.info(f"Напоминание об отзыве отправлено для #{check_order.funpay_order_id}")
                 else:
                     logger.info(f"Напоминание об отзыве отменено для #{db_order.funpay_order_id} (заказ изменён)")
@@ -570,14 +644,24 @@ class FunPayBridge:
                     except Exception as e:
                         logger.error(f"Ошибка вечного онлайна: {e}")
 
-                # Автоподнятие лотов
+                # Автоподнятие лотов только в тех категориях/подкатегориях, где есть наши лоты
                 if settings and settings.auto_bump and (now - last_bump_time > BUMP_INTERVAL):
                     try:
-                        categories = self.account.categories  # Это свойство, а не метод
+                        categories = self.account.categories
                         for cat in categories:
                             try:
-                                self.account.raise_lots(cat.id)
-                                logger.info(f"Лоты категории {cat.name} подняты.")
+                                subcats = cat.get_subcategories() if hasattr(cat, 'get_subcategories') else []
+                                subcats_with_lots = []
+                                for sub in subcats:
+                                    try:
+                                        lots = self.account.get_my_subcategory_lots(sub.id)
+                                        if lots:
+                                            subcats_with_lots.append(sub)
+                                    except Exception:
+                                        continue
+                                if subcats_with_lots:
+                                    self.account.raise_lots(cat.id, subcategories=subcats_with_lots)
+                                    logger.info(f"Лоты категории {cat.name} подняты ({len(subcats_with_lots)} подкатегорий с лотами).")
                             except Exception as e:
                                 logger.warning(f"Не удалось поднять {cat.name}: {e}")
                         last_bump_time = now

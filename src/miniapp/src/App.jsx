@@ -88,6 +88,7 @@ export default function App() {
   // Lot editor
   const [editingLot, setEditingLot] = useState(null);
   const [editingScriptText, setEditingScriptText] = useState(null);
+  const [scriptTextEditValue, setScriptTextEditValue] = useState('');
   const [selectedFunpayLot, setSelectedFunpayLot] = useState(null);
   const [newLotScript, setNewLotScript] = useState('none');
 
@@ -112,8 +113,7 @@ export default function App() {
     } else if (activeTab === 'settings') {
       loadLots();
       loadScriptTypes();
-      if (settingsView === 'lots' && funpayLots.length === 0) {
-        // Загружаем только если список пустой
+      if (settingsView === 'lots') {
         loadFunpayLots();
       }
     }
@@ -607,7 +607,7 @@ export default function App() {
                 <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-500"><BellRing size={20} /></div>
                 <div>
                   <p className="text-xs font-black text-white uppercase tracking-tight">Напоминание об отзыве</p>
-                  <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-tighter mt-0.5">Авто-сообщение после покупки</p>
+                  <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-tighter mt-0.5">Авто-сообщение после подтверждения заказа</p>
                 </div>
               </div>
               <Toggle enabled={automation.review_reminder} onClick={() => handleAutomationChange('review_reminder', !automation.review_reminder)} />
@@ -616,13 +616,14 @@ export default function App() {
               <div className="px-5 pb-5 pt-2 space-y-5 animate-fade-in">
                 <div className="space-y-2">
                   <label className="flex items-center gap-2 text-[9px] font-black text-zinc-500 uppercase tracking-widest px-1">
-                    <Timer size={10} /> Задержка (в минутах)
+                    <Timer size={10} /> Задержка (в секундах)
                   </label>
                   <input
                     type="number"
-                    value={automation.review_delay_minutes || 1440}
-                    onChange={(e) => handleAutomationChange('review_delay_minutes', parseInt(e.target.value) || 1440)}
-                    placeholder="Напр: 1440 (24ч)"
+                    value={automation.review_delay_seconds ?? 3}
+                    onChange={(e) => handleAutomationChange('review_delay_seconds', parseInt(e.target.value) || 3)}
+                    placeholder="Напр: 3"
+                    min={1}
                     className="w-full bg-black border border-zinc-800 rounded-xl py-3 px-4 text-xs font-bold text-white focus:outline-none focus:border-amber-500 transition-colors"
                   />
                 </div>
@@ -650,7 +651,7 @@ export default function App() {
                 </div>
                 <div className="bg-amber-500/5 border border-amber-500/10 p-3 rounded-xl">
                   <p className="text-[9px] font-bold text-amber-400/80 leading-relaxed uppercase tracking-tighter italic">
-                    Сообщение будет отправлено через {automation.review_delay_minutes || 1440} мин. после подтверждения заказа.
+                    Сообщение будет отправлено через {automation.review_delay_seconds ?? 3} сек. после подтверждения заказа.
                   </p>
                 </div>
               </div>
@@ -709,8 +710,16 @@ export default function App() {
               <p className="text-[10px] text-zinc-500 mt-2 text-center">Загрузка лотов...</p>
             )}
             {!loading && allLots.length === 0 && (
-              <p className="text-[10px] text-zinc-500 mt-2 text-center">Лоты не найдены</p>
+              <p className="text-[10px] text-zinc-500 mt-2 text-center">Лоты не найдены. Убедитесь, что бот подключён к FunPay, и нажмите «Обновить».</p>
             )}
+            <button
+              type="button"
+              onClick={() => loadFunpayLots()}
+              disabled={loading}
+              className="mt-2 w-full py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 rounded-xl text-[10px] font-bold uppercase flex items-center justify-center gap-2"
+            >
+              <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> Обновить список лотов
+            </button>
           </div>
 
           {/* Выбранный лот */}
@@ -763,7 +772,15 @@ export default function App() {
                 <div className="flex gap-2">
                   {lot.script_type !== 'none' && (
                     <button
-                      onClick={() => setEditingScriptText(editingScriptText === lot.id ? null : lot.id)}
+                      onClick={() => {
+                        if (editingScriptText === lot.id) {
+                          setEditingScriptText(null);
+                          setScriptTextEditValue('');
+                        } else {
+                          setEditingScriptText(lot.id);
+                          setScriptTextEditValue(JSON.stringify(lot.script_custom_text || {}, null, 2));
+                        }
+                      }}
                       className="p-2 text-zinc-600 hover:text-blue-400 transition-colors"
                       title="Редактировать текст скрипта"
                     >
@@ -800,14 +817,36 @@ export default function App() {
                 </div>
               ) : editingScriptText === lot.id ? (
                 <div className="space-y-3 animate-fade-in pt-2 border-t border-zinc-800">
-                  <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Редактирование текста скрипта</p>
-                  <p className="text-[9px] text-zinc-600 italic">Функция в разработке. Скоро можно будет редактировать текст сообщений скрипта.</p>
-                  <button
-                    onClick={() => setEditingScriptText(null)}
-                    className="w-full py-2 bg-zinc-800 text-white rounded-xl text-[10px] font-black uppercase"
-                  >
-                    Закрыть
-                  </button>
+                  <p className="text-[10px] font-black text-zinc-500 uppercase tracking-widest">Редактирование текста скрипта (JSON)</p>
+                  <textarea
+                    value={scriptTextEditValue}
+                    onChange={(e) => setScriptTextEditValue(e.target.value)}
+                    rows={6}
+                    className="w-full bg-black border border-zinc-800 rounded-xl py-2 px-3 text-[11px] font-mono text-white focus:outline-none focus:border-blue-500 resize-none"
+                  />
+                  <p className="text-[9px] text-zinc-600">Формат: {`{"step_id": {"ru": "текст", "en": "text"}}`}</p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => { setEditingScriptText(null); setScriptTextEditValue(''); }}
+                      className="flex-1 py-2 bg-zinc-800 text-white rounded-xl text-[10px] font-black uppercase"
+                    >
+                      Закрыть
+                    </button>
+                    <button
+                      onClick={async () => {
+                        try {
+                          const parsed = JSON.parse(scriptTextEditValue || '{}');
+                          await api.updateLot(lot.id, { script_custom_text: parsed });
+                          await loadLots();
+                          setEditingScriptText(null);
+                          setScriptTextEditValue('');
+                        } catch (err) { setError('Неверный JSON: ' + (err.message || '')); }
+                      }}
+                      className="flex-1 py-2 bg-blue-600 text-white rounded-xl text-[10px] font-black uppercase"
+                    >
+                      Сохранить
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <button
