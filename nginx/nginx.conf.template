@@ -3,6 +3,11 @@
 # Port: 21000
 # __DOMAIN__ is replaced at container startup by entrypoint.sh
 # ============================================================
+# upstream должен быть на уровне http (вне server)
+upstream backend_api {
+    server backend:8080 max_fails=0;
+    keepalive 8;
+}
 
 server {
     listen 21000 ssl http2;
@@ -35,12 +40,6 @@ server {
     location = /favicon.ico {
         return 204;
         add_header Content-Type image/x-icon;
-    }
-
-    # Upstream backend с keepalive и повторными попытками при 502/504
-    upstream backend_api {
-        server backend:8080 max_fails=0;
-        keepalive 8;
     }
 
     # API → backend (retry при отказе/таймауте)
