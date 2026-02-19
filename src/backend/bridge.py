@@ -297,9 +297,8 @@ class FunPayBridge:
                     author = getattr(message, 'author_name', None) or getattr(message, 'chat_name', None) or "Покупатель"
                     link = FUNPAY_CHAT_URL_TEMPLATE.format(chat_id=chat_id)
                     self.notify_telegram(
-                        f"💬 Вам написали на FunPay!\n\n"
-                        f"От: {author}\n\n"
-                        f"Перейти в чат: {link}"
+                        f"💬 Новое сообщение ({author})\n\n"
+                        f"{link}"
                     )
                 return
 
@@ -805,3 +804,4 @@ class FunPayBridge:
             )
             session.add(snapshot)
             session.commit()
+
