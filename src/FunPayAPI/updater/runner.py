@@ -596,7 +596,7 @@ class Runner:
         else:
             self.by_bot_ids[chat_id].append(message_id)
 
-    def listen(self, requests_delay: int | float = 6.0,
+    def listen(self, requests_delay: int | float = 1.0,
                ignore_exceptions: bool = True) -> Generator[InitialChatEvent | ChatsListChangedEvent |
                                                             LastChatMessageChangedEvent | NewMessageEvent |
                                                             InitialOrderEvent | OrdersListChangedEvent | NewOrderEvent |
